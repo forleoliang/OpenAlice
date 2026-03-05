@@ -64,7 +64,6 @@ export {
   registerGuard,
   resolveGuards,
   MaxPositionSizeGuard,
-  MaxLeverageGuard,
   CooldownGuard,
   SymbolWhitelistGuard,
 } from './guards/index.js'
