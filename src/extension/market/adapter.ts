@@ -28,7 +28,7 @@ Returns matching symbols with assetClass attribution ("equity", "crypto", or "cu
 Equity results come from SEC/TMX listings (~13k US/CA stocks); crypto and currency results
 come from Yahoo Finance fuzzy search. Currency results are filtered to XXXUSD pairs only.
 
-Use this to discover the correct symbol before calling market data tools
+If unsure about the symbol, use this to find the correct one for market data tools
 (equityGetProfile, equityGetFinancials, calculateIndicator, etc.).
 This is NOT for trading — use searchContracts to find broker-tradeable contracts.`,
       inputSchema: z.object({
