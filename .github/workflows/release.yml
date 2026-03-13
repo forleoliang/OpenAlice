@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     branches: [master]
+  workflow_dispatch:
 
 jobs:
   release:
@@ -84,36 +85,43 @@ jobs:
           registry-url: https://npm.pkg.github.com
           cache: pnpm
 
-      - name: Check if version already published
+      - name: Check published versions
         id: check
         working-directory: packages/opentypebb
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
           if npm view "@traderalice/opentypebb@$VERSION" version --registry=https://npm.pkg.github.com 2>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ghpkg=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "ghpkg=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if npm view "@traderalice/opentypebb@$VERSION" version --registry=https://registry.npmjs.org 2>/dev/null; then
+            echo "npmjs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "npmjs=false" >> "$GITHUB_OUTPUT"
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.ghpkg == 'false' || steps.check.outputs.npmjs == 'false'
         working-directory: packages/opentypebb
         run: |
           pnpm install --frozen-lockfile
           pnpm build
 
       - name: Publish to GitHub Packages
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.ghpkg == 'false'
         working-directory: packages/opentypebb
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish to npmjs
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.npmjs == 'false'
         working-directory: packages/opentypebb
         run: |
           echo "//registry.npmjs.org/:_authToken=\${NODE_AUTH_TOKEN}" > "$NPM_CONFIG_USERCONFIG"
