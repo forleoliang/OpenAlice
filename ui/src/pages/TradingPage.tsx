@@ -5,8 +5,9 @@ import { GuardsSection, CRYPTO_GUARD_TYPES, SECURITIES_GUARD_TYPES } from '../co
 import { SDKSelector, PLATFORM_TYPE_OPTIONS } from '../components/SDKSelector'
 import { ReconnectButton } from '../components/ReconnectButton'
 import { useTradingConfig } from '../hooks/useTradingConfig'
+import { useAccountHealth } from '../hooks/useAccountHealth'
 import { PageHeader } from '../components/PageHeader'
-import type { PlatformConfig, CcxtPlatformConfig, AlpacaPlatformConfig, AccountConfig } from '../api/types'
+import type { PlatformConfig, CcxtPlatformConfig, AlpacaPlatformConfig, AccountConfig, BrokerHealthInfo } from '../api/types'
 
 // ==================== Dialog state ====================
 
@@ -19,6 +20,7 @@ type DialogState =
 
 export function TradingPage() {
   const tc = useTradingConfig()
+  const healthMap = useAccountHealth()
   const [dialog, setDialog] = useState<DialogState>(null)
 
   // Close dialog if the selected account was deleted
@@ -64,6 +66,7 @@ export function TradingPage() {
           <AccountsTable
             accounts={tc.accounts}
             platforms={tc.platforms}
+            healthMap={healthMap}
             onSelect={(id) => setDialog({ kind: 'edit', accountId: id })}
           />
 
@@ -150,9 +153,47 @@ function Dialog({ onClose, width, children }: {
 
 // ==================== Accounts Table ====================
 
-function AccountsTable({ accounts, platforms, onSelect }: {
+function HealthBadge({ health }: { health?: BrokerHealthInfo }) {
+  if (!health) return <span className="text-text-muted/40">—</span>
+
+  if (health.disabled) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[11px] text-text-muted" title={health.lastError}>
+        <span className="w-1.5 h-1.5 rounded-full bg-text-muted/40 shrink-0" />
+        Disabled
+      </span>
+    )
+  }
+
+  switch (health.status) {
+    case 'healthy':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-green">
+          <span className="w-1.5 h-1.5 rounded-full bg-green shrink-0" />
+          Connected
+        </span>
+      )
+    case 'degraded':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-yellow-400">
+          <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0" />
+          Unstable
+        </span>
+      )
+    case 'offline':
+      return (
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-red" title={health.lastError}>
+          <span className="w-1.5 h-1.5 rounded-full bg-red shrink-0 animate-pulse" />
+          {health.recovering ? 'Reconnecting...' : 'Offline'}
+        </span>
+      )
+  }
+}
+
+function AccountsTable({ accounts, platforms, healthMap, onSelect }: {
   accounts: AccountConfig[]
   platforms: PlatformConfig[]
+  healthMap: Record<string, BrokerHealthInfo>
   onSelect: (id: string) => void
 }) {
   const getPlatform = (platformId: string) => platforms.find((p) => p.id === platformId)
@@ -183,12 +224,15 @@ function AccountsTable({ accounts, platforms, onSelect }: {
             <th className="text-left pl-4 pr-2 py-2.5 font-medium w-[40px]"></th>
             <th className="text-left px-3 py-2.5 font-medium">Account</th>
             <th className="text-left px-3 py-2.5 font-medium">Connection</th>
+            <th className="text-left px-3 py-2.5 font-medium">Status</th>
             <th className="text-left px-3 py-2.5 font-medium">Guards</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
           {accounts.map((account) => {
             const p = getPlatform(account.platformId)
+            const health = healthMap[account.id]
+            const isDisabled = health?.disabled
             const badge = p?.type === 'ccxt'
               ? { text: 'CC', color: 'text-accent bg-accent/10' }
               : { text: 'AL', color: 'text-green bg-green/10' }
@@ -197,7 +241,7 @@ function AccountsTable({ accounts, platforms, onSelect }: {
               <tr
                 key={account.id}
                 onClick={() => onSelect(account.id)}
-                className="cursor-pointer transition-colors hover:bg-bg-tertiary/30"
+                className={`cursor-pointer transition-colors hover:bg-bg-tertiary/30 ${isDisabled ? 'opacity-50' : ''}`}
               >
                 <td className="pl-4 pr-2 py-2.5">
                   <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${badge.color}`}>
@@ -206,6 +250,9 @@ function AccountsTable({ accounts, platforms, onSelect }: {
                 </td>
                 <td className="px-3 py-2.5 font-medium text-text">{account.id}</td>
                 <td className="px-3 py-2.5 text-text-muted">{getConnectionLabel(account)}</td>
+                <td className="px-3 py-2.5">
+                  <HealthBadge health={health} />
+                </td>
                 <td className="px-3 py-2.5 text-text-muted">
                   {account.guards.length > 0 ? account.guards.length : '—'}
                 </td>

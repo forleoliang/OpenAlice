@@ -57,6 +57,7 @@ export interface UnifiedTradingAccountOptions {
   guards?: Array<{ type: string; options?: Record<string, unknown> }>
   savedState?: GitExportState
   onCommit?: (state: GitExportState) => void | Promise<void>
+  onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
   platformId?: string
 }
 
@@ -108,6 +109,7 @@ export class UnifiedTradingAccount {
   readonly platformId?: string
 
   private readonly _getState: () => Promise<GitState>
+  private readonly _onHealthChange?: (accountId: string, health: BrokerHealthInfo) => void
 
   // ---- Health tracking ----
   private static readonly DEGRADED_THRESHOLD = 3
@@ -128,6 +130,7 @@ export class UnifiedTradingAccount {
     this.id = broker.id
     this.label = broker.label
     this.platformId = options.platformId
+    this._onHealthChange = options.onHealthChange
 
     // Wire internals
     this._getState = async (): Promise<GitState> => {
@@ -215,6 +218,7 @@ export class UnifiedTradingAccount {
       await this.broker.init()
       await this.broker.getAccount()
       this._onSuccess()
+      this._emitHealthChange()
       console.log(`UTA[${this.id}]: connected`)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -222,6 +226,7 @@ export class UnifiedTradingAccount {
         console.warn(`UTA[${this.id}]: disabled — ${msg}`)
         this._disabled = true
         this._lastError = msg
+        this._emitHealthChange()
         return
       }
       console.warn(`UTA[${this.id}]: initial connect failed: ${msg}`)
@@ -249,7 +254,12 @@ export class UnifiedTradingAccount {
     }
   }
 
+  private _emitHealthChange(): void {
+    this._onHealthChange?.(this.id, this.getHealthInfo())
+  }
+
   private _onSuccess(): void {
+    const prev = this.health
     this._consecutiveFailures = 0
     this._lastSuccessAt = new Date()
     if (this._recoveryTimer) {
@@ -257,20 +267,24 @@ export class UnifiedTradingAccount {
       this._recoveryTimer = undefined
       this._recovering = false
     }
+    if (prev !== this.health) this._emitHealthChange()
   }
 
   private _onFailure(err: unknown): void {
+    const prev = this.health
     this._consecutiveFailures++
     this._lastError = err instanceof Error ? err.message : String(err)
     this._lastFailureAt = new Date()
     if (this.health === 'offline' && !this._recovering) {
       this._startRecovery()
     }
+    if (prev !== this.health) this._emitHealthChange()
   }
 
   private _startRecovery(): void {
     if (this._recovering) return
     this._recovering = true
+    this._emitHealthChange()
     console.log(`UTA[${this.id}]: offline, starting auto-recovery...`)
     this._scheduleRecoveryAttempt(0)
   }
@@ -292,6 +306,7 @@ export class UnifiedTradingAccount {
           console.warn(`UTA[${this.id}]: disabled — ${msg}`)
           this._disabled = true
           this._recovering = false
+          this._emitHealthChange()
           return
         }
         console.warn(`UTA[${this.id}]: recovery attempt ${attempt + 1} failed: ${msg}`)
