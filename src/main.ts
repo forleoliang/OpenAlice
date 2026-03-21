@@ -350,10 +350,13 @@ async function main() {
         return { success: false, error: `Platform "${accCfg.platformId}" not found for account "${accountId}"` }
       }
 
-      const ok = await initAccount(accCfg, platform)
-      if (!ok) {
+      const uta = await initAccount(accCfg, platform)
+      if (!uta) {
         return { success: false, error: `Account "${accountId}" init failed` }
       }
+
+      // Wait for broker.init() + broker.getAccount() to verify the connection
+      await uta.waitForConnect()
 
       // Re-register CCXT-specific tools if this is a CCXT account
       if (platform.providerType !== 'alpaca') {
@@ -363,7 +366,7 @@ async function main() {
         )
       }
 
-      const label = accountManager.get(accountId)?.label ?? accountId
+      const label = uta.label ?? accountId
       console.log(`reconnect: ${label} online`)
       return { success: true, message: `${label} reconnected` }
     } catch (err) {

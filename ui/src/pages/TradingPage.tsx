@@ -90,7 +90,12 @@ export function TradingPage() {
           onSave={async (platform, account) => {
             await tc.savePlatform(platform)
             await tc.saveAccount(account)
-            if (account.apiKey) tc.reconnectAccount(account.id).catch(() => {})
+            if (account.apiKey) {
+              const result = await tc.reconnectAccount(account.id)
+              if (!result.success) {
+                throw new Error(result.error || 'Connection failed')
+              }
+            }
             setDialog(null)
           }}
           onClose={() => setDialog(null)}

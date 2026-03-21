@@ -124,6 +124,7 @@ export class UnifiedTradingAccount {
   private _recoveryTimer?: ReturnType<typeof setTimeout>
   private _recovering = false
   private _disabled = false
+  private _connectPromise: Promise<void>
 
   constructor(broker: IBroker, options: UnifiedTradingAccountOptions = {}) {
     this.broker = broker
@@ -184,7 +185,17 @@ export class UnifiedTradingAccount {
 
     // Kick off broker connection asynchronously — UTA is usable immediately,
     // broker queries will fail (tracked by health) until init succeeds.
-    this._connect()
+    const p = this._connect()
+    // Silence unhandled rejection in fire-and-forget path.
+    // waitForConnect() returns the raw promise so callers can observe failures.
+    p.catch(() => {})
+    this._connectPromise = p
+
+  }
+
+  /** Await initial broker connection. Resolves on success, rejects on failure. */
+  waitForConnect(): Promise<void> {
+    return this._connectPromise
   }
 
   // ==================== Health ====================
@@ -227,13 +238,14 @@ export class UnifiedTradingAccount {
         this._disabled = true
         this._lastError = msg
         this._emitHealthChange()
-        return
+        throw err
       }
       console.warn(`UTA[${this.id}]: initial connect failed: ${msg}`)
       this._consecutiveFailures = UnifiedTradingAccount.OFFLINE_THRESHOLD
       this._lastError = msg
       this._lastFailureAt = new Date()
       this._startRecovery()
+      throw err
     }
   }
 
