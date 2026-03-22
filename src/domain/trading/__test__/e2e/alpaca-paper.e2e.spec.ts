@@ -1,8 +1,9 @@
 /**
  * AlpacaBroker e2e — real orders against Alpaca paper trading.
  *
- * Reads Alice's config, picks the first Alpaca paper account.
- * If none configured, entire suite skips.
+ * Split into two groups:
+ * - Connectivity tests: run any time (account info, positions, search, clock)
+ * - Trading tests: only when market is open (quotes, orders, close)
  *
  * Run: pnpm test:e2e
  */
@@ -15,6 +16,7 @@ import type { IBroker } from '../../brokers/types.js'
 import '../../contract-ext.js'
 
 let broker: IBroker | null = null
+let marketOpen = false
 
 beforeAll(async () => {
   const all = await getTestAccounts()
@@ -24,10 +26,14 @@ beforeAll(async () => {
     return
   }
   broker = alpaca.broker
-  console.log(`e2e: ${alpaca.label} connected`)
+  const clock = await broker.getMarketClock()
+  marketOpen = clock.isOpen
+  console.log(`e2e: ${alpaca.label} connected (market ${marketOpen ? 'OPEN' : 'CLOSED'})`)
 }, 60_000)
 
-describe('AlpacaBroker — Paper e2e', () => {
+// ==================== Connectivity (any time) ====================
+
+describe('AlpacaBroker — connectivity', () => {
   it('has a configured Alpaca paper account (or skips entire suite)', () => {
     if (!broker) {
       console.log('e2e: skipped — no Alpaca paper account')
@@ -57,13 +63,35 @@ describe('AlpacaBroker — Paper e2e', () => {
     const results = await broker.searchContracts('AAPL')
     expect(results.length).toBeGreaterThan(0)
     expect(results[0].contract.symbol).toBe('AAPL')
-    // Broker no longer sets aliceId — that's UTA's job
     expect(results[0].contract.aliceId).toBeUndefined()
     console.log(`  found: ${results[0].contract.symbol}, secType: ${results[0].contract.secType}`)
   })
 
-  it('fetches AAPL quote with valid prices', async () => {
+  it('fetches positions with correct types', async () => {
     if (!broker) return
+    const positions = await broker.getPositions()
+    console.log(`  ${positions.length} positions total`)
+    for (const p of positions) {
+      console.log(`  ${p.contract.symbol}: qty=${p.quantity} (type=${typeof p.quantity.toNumber()}), avg=${p.avgCost} (type=${typeof p.avgCost}), mkt=${p.marketPrice}`)
+      expect(p.quantity).toBeInstanceOf(Decimal)
+      expect(typeof p.avgCost).toBe('number')
+      expect(typeof p.marketPrice).toBe('number')
+      expect(typeof p.unrealizedPnL).toBe('number')
+    }
+  })
+})
+
+// ==================== Trading (market hours only) ====================
+
+describe('AlpacaBroker — trading (market hours)', () => {
+  beforeAll(() => {
+    if (!broker || !marketOpen) {
+      console.log('e2e: skipping trading tests — market closed or no broker')
+    }
+  })
+
+  it('fetches AAPL quote with valid prices', async () => {
+    if (!broker || !marketOpen) return
     const contract = new Contract()
     contract.aliceId = 'alpaca-AAPL'
     contract.symbol = 'AAPL'
@@ -77,7 +105,7 @@ describe('AlpacaBroker — Paper e2e', () => {
   })
 
   it('places market buy 1 AAPL → success with UUID orderId', async () => {
-    if (!broker) return
+    if (!broker || !marketOpen) return
 
     const contract = new Contract()
     contract.aliceId = 'alpaca-AAPL'
@@ -100,15 +128,13 @@ describe('AlpacaBroker — Paper e2e', () => {
 
     expect(result.success).toBe(true)
     expect(result.orderId).toBeDefined()
-    // Alpaca order IDs are UUIDs like "b0b6dd9d-8b9b-..."
     expect(result.orderId!.length).toBeGreaterThan(10)
     console.log(`  orderId: ${result.orderId} (length=${result.orderId!.length})`)
   }, 15_000)
 
   it('queries order by ID after place', async () => {
-    if (!broker) return
+    if (!broker || !marketOpen) return
 
-    // Place a fresh order to get an ID
     const contract = new Contract()
     contract.aliceId = 'alpaca-AAPL'
     contract.symbol = 'AAPL'
@@ -123,7 +149,6 @@ describe('AlpacaBroker — Paper e2e', () => {
     const placed = await broker.placeOrder(contract, order)
     if (!placed.orderId) { console.log('  no orderId returned, skipping'); return }
 
-    // Wait for fill
     await new Promise(r => setTimeout(r, 2000))
 
     const detail = await broker.getOrder(placed.orderId)
@@ -138,13 +163,12 @@ describe('AlpacaBroker — Paper e2e', () => {
     expect(detail).not.toBeNull()
     if (detail) {
       expect(detail.orderState.status).toBe('Filled')
-      // Bug check: order.orderId should NOT be NaN or meaningless
       console.log(`  order.orderId (IBKR number field): ${detail.order.orderId} — parseInt('${placed.orderId}') = ${parseInt(placed.orderId, 10)}`)
     }
   }, 15_000)
 
   it('verifies AAPL position exists after buy', async () => {
-    if (!broker) return
+    if (!broker || !marketOpen) return
     const positions = await broker.getPositions()
     const aapl = positions.find(p => p.contract.symbol === 'AAPL')
     expect(aapl).toBeDefined()
@@ -157,22 +181,20 @@ describe('AlpacaBroker — Paper e2e', () => {
   })
 
   it('closes AAPL position', async () => {
-    if (!broker) return
+    if (!broker || !marketOpen) return
 
     const contract = new Contract()
     contract.aliceId = 'alpaca-AAPL'
     contract.symbol = 'AAPL'
 
-    // Close all AAPL — use native full close
     const result = await broker.closePosition(contract)
     console.log(`  closePosition: success=${result.success}, orderId=${result.orderId}, error=${result.error}`)
     expect(result.success).toBe(true)
   }, 15_000)
 
   it('getOrders with known IDs', async () => {
-    if (!broker) return
+    if (!broker || !marketOpen) return
 
-    // Place + wait + query
     const contract = new Contract()
     contract.aliceId = 'alpaca-AAPL'
     contract.symbol = 'AAPL'
@@ -199,18 +221,4 @@ describe('AlpacaBroker — Paper e2e', () => {
     // Clean up
     await broker.closePosition(contract)
   }, 15_000)
-
-  it('fetches positions with correct types', async () => {
-    if (!broker) return
-    const positions = await broker.getPositions()
-    console.log(`  ${positions.length} positions total`)
-    for (const p of positions) {
-      console.log(`  ${p.contract.symbol}: qty=${p.quantity} (type=${typeof p.quantity.toNumber()}), avg=${p.avgCost} (type=${typeof p.avgCost}), mkt=${p.marketPrice}`)
-      // Verify quantity is actually a Decimal
-      expect(p.quantity).toBeInstanceOf(Decimal)
-      expect(typeof p.avgCost).toBe('number')
-      expect(typeof p.marketPrice).toBe('number')
-      expect(typeof p.unrealizedPnL).toBe('number')
-    }
-  })
 })

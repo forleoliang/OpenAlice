@@ -19,6 +19,7 @@ import '../../contract-ext.js'
 
 describe('UTA — Alpaca paper (AAPL)', () => {
   let broker: IBroker | null = null
+  let marketOpen = false
 
   beforeAll(async () => {
     const all = await getTestAccounts()
@@ -28,10 +29,14 @@ describe('UTA — Alpaca paper (AAPL)', () => {
       return
     }
     broker = alpaca.broker
+    const clock = await broker.getMarketClock()
+    marketOpen = clock.isOpen
+    console.log(`UTA Alpaca: market ${marketOpen ? 'OPEN' : 'CLOSED'}`)
   }, 60_000)
 
   it('full lifecycle: buy → sync → verify → close → sync → verify', async () => {
     if (!broker) { console.log('e2e: skipped — no Alpaca paper account'); return }
+    if (!marketOpen) { console.log('e2e: skipped — market closed'); return }
 
     const uta = new UnifiedTradingAccount(broker)
 
@@ -56,7 +61,7 @@ describe('UTA — Alpaca paper (AAPL)', () => {
     console.log(`  committed: hash=${commitResult.hash}`)
 
     const pushResult = await uta.push()
-    console.log(`  pushed: submitted=${pushResult.submitted.length}, rejected=${pushResult.rejected.length}`)
+    console.log(`  pushed: submitted=${pushResult.submitted.length}, rejected=${pushResult.rejected.length}, status=${pushResult.submitted[0]?.status}`)
     expect(pushResult.submitted).toHaveLength(1)
     expect(pushResult.rejected).toHaveLength(0)
 
@@ -64,11 +69,15 @@ describe('UTA — Alpaca paper (AAPL)', () => {
     console.log(`  orderId: ${buyOrderId}`)
     expect(buyOrderId).toBeDefined()
 
-    // === Sync: confirm fill ===
-    const sync1 = await uta.sync({ delayMs: 2000 })
-    console.log(`  sync1: updatedCount=${sync1.updatedCount}, updates=${JSON.stringify(sync1.updates.map(u => ({ s: u.symbol, from: u.previousStatus, to: u.currentStatus })))}`)
-    expect(sync1.updatedCount).toBe(1)
-    expect(sync1.updates[0].currentStatus).toBe('filled')
+    // === Sync: may or may not have updates depending on whether fill was synchronous ===
+    if (pushResult.submitted[0].status === 'submitted') {
+      const sync1 = await uta.sync({ delayMs: 2000 })
+      console.log(`  sync1: updatedCount=${sync1.updatedCount}`)
+      expect(sync1.updatedCount).toBe(1)
+      expect(sync1.updates[0].currentStatus).toBe('filled')
+    } else {
+      console.log(`  sync1: skipped (already ${pushResult.submitted[0].status} at push time)`)
+    }
 
     // === Verify: position exists, no pending ===
     const state1 = await uta.getState()
@@ -82,14 +91,18 @@ describe('UTA — Alpaca paper (AAPL)', () => {
     uta.stageClosePosition({ aliceId: `${uta.id}|AAPL`, qty: 1 })
     uta.commit('e2e: close 1 AAPL')
     const closePush = await uta.push()
-    console.log(`  close pushed: submitted=${closePush.submitted.length}`)
+    console.log(`  close pushed: submitted=${closePush.submitted.length}, status=${closePush.submitted[0]?.status}`)
     expect(closePush.submitted).toHaveLength(1)
 
-    // === Sync: confirm close fill ===
-    const sync2 = await uta.sync({ delayMs: 2000 })
-    console.log(`  sync2: updatedCount=${sync2.updatedCount}`)
-    expect(sync2.updatedCount).toBe(1)
-    expect(sync2.updates[0].currentStatus).toBe('filled')
+    // === Sync: same — depends on fill timing ===
+    if (closePush.submitted[0].status === 'submitted') {
+      const sync2 = await uta.sync({ delayMs: 2000 })
+      console.log(`  sync2: updatedCount=${sync2.updatedCount}`)
+      expect(sync2.updatedCount).toBe(1)
+      expect(sync2.updates[0].currentStatus).toBe('filled')
+    } else {
+      console.log(`  sync2: skipped (already ${closePush.submitted[0].status} at push time)`)
+    }
 
     // === Verify: position back to initial ===
     const finalPositions = await broker.getPositions()
@@ -157,7 +170,7 @@ describe('UTA — Bybit demo (ETH perp)', () => {
     console.log(`  committed: hash=${commitResult.hash}`)
 
     const pushResult = await uta.push()
-    console.log(`  pushed: submitted=${pushResult.submitted.length}, rejected=${pushResult.rejected.length}`)
+    console.log(`  pushed: submitted=${pushResult.submitted.length}, rejected=${pushResult.rejected.length}, status=${pushResult.submitted[0]?.status}`)
     expect(pushResult.submitted).toHaveLength(1)
     expect(pushResult.rejected).toHaveLength(0)
 
@@ -165,11 +178,15 @@ describe('UTA — Bybit demo (ETH perp)', () => {
     console.log(`  orderId: ${buyOrderId}`)
     expect(buyOrderId).toBeDefined()
 
-    // === Sync: confirm fill (Bybit needs more time) ===
-    const sync1 = await uta.sync({ delayMs: 3000 })
-    console.log(`  sync1: updatedCount=${sync1.updatedCount}, updates=${JSON.stringify(sync1.updates.map(u => ({ s: u.symbol, from: u.previousStatus, to: u.currentStatus })))}`)
-    expect(sync1.updatedCount).toBe(1)
-    expect(sync1.updates[0].currentStatus).toBe('filled')
+    // === Sync: may or may not have updates depending on whether fill was synchronous ===
+    if (pushResult.submitted[0].status === 'submitted') {
+      const sync1 = await uta.sync({ delayMs: 3000 })
+      console.log(`  sync1: updatedCount=${sync1.updatedCount}`)
+      expect(sync1.updatedCount).toBe(1)
+      expect(sync1.updates[0].currentStatus).toBe('filled')
+    } else {
+      console.log(`  sync1: skipped (already ${pushResult.submitted[0].status} at push time)`)
+    }
 
     // === Verify: position exists ===
     const state1 = await uta.getState()
@@ -182,14 +199,18 @@ describe('UTA — Bybit demo (ETH perp)', () => {
     uta.stageClosePosition({ aliceId: ethAliceId, qty: 0.01 })
     uta.commit('e2e: close 0.01 ETH')
     const closePush = await uta.push()
-    console.log(`  close pushed: submitted=${closePush.submitted.length}`)
+    console.log(`  close pushed: submitted=${closePush.submitted.length}, status=${closePush.submitted[0]?.status}`)
     expect(closePush.submitted).toHaveLength(1)
 
-    // === Sync: confirm close fill ===
-    const sync2 = await uta.sync({ delayMs: 3000 })
-    console.log(`  sync2: updatedCount=${sync2.updatedCount}`)
-    expect(sync2.updatedCount).toBe(1)
-    expect(sync2.updates[0].currentStatus).toBe('filled')
+    // === Sync: same — depends on fill timing ===
+    if (closePush.submitted[0].status === 'submitted') {
+      const sync2 = await uta.sync({ delayMs: 3000 })
+      console.log(`  sync2: updatedCount=${sync2.updatedCount}`)
+      expect(sync2.updatedCount).toBe(1)
+      expect(sync2.updates[0].currentStatus).toBe('filled')
+    } else {
+      console.log(`  sync2: skipped (already ${closePush.submitted[0].status} at push time)`)
+    }
 
     // === Verify: we bought 0.01 then closed 0.01, net change should be ~0 ===
     const finalPositions = await broker.getPositions()
