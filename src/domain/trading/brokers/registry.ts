@@ -51,7 +51,9 @@ export interface BrokerRegistryEntry {
 
 export const BROKER_REGISTRY: Record<string, BrokerRegistryEntry> = {
   ccxt: {
-    ...CcxtBroker,
+    configSchema: CcxtBroker.configSchema,
+    configFields: CcxtBroker.configFields,
+    fromConfig: CcxtBroker.fromConfig,
     name: 'CCXT (Crypto)',
     description: 'Unified API for 100+ crypto exchanges. Supports Binance, Bybit, OKX, Coinbase, and more.',
     badge: 'CC',
@@ -64,7 +66,9 @@ export const BROKER_REGISTRY: Record<string, BrokerRegistryEntry> = {
     guardCategory: 'crypto',
   },
   alpaca: {
-    ...AlpacaBroker,
+    configSchema: AlpacaBroker.configSchema,
+    configFields: AlpacaBroker.configFields,
+    fromConfig: AlpacaBroker.fromConfig,
     name: 'Alpaca (Securities)',
     description: 'Commission-free US equities and ETFs with fractional share support.',
     badge: 'AL',
@@ -75,7 +79,9 @@ export const BROKER_REGISTRY: Record<string, BrokerRegistryEntry> = {
     guardCategory: 'securities',
   },
   ibkr: {
-    ...IbkrBroker,
+    configSchema: IbkrBroker.configSchema,
+    configFields: IbkrBroker.configFields,
+    fromConfig: IbkrBroker.fromConfig,
     name: 'IBKR (Interactive Brokers)',
     description: 'Professional-grade trading via TWS or IB Gateway. Stocks, options, futures, bonds.',
     badge: 'IB',
