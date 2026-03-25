@@ -34,16 +34,17 @@ Your one-person Wall Street. Alice is an AI trading agent that gives you your ow
 - **Event log** — persistent append-only JSONL event log with real-time subscriptions and crash recovery
 - **Cron scheduling** — event-driven cron system with AI-powered job execution and automatic delivery to the last-interacted channel
 - **Evolution mode** — two-tier permission system. Normal mode sandboxes the AI to `data/brain/`; evolution mode gives full project access including Bash, enabling the agent to modify its own source code
-- **Hot-reload** — enable/disable connectors (Telegram, MCP Ask) and reconnect trading engines at runtime without restart
-- **Web UI** — local chat interface with real-time SSE streaming, sub-channels with per-channel AI config, portfolio dashboard, and full config management (trading, data sources, connectors, AI provider, heartbeat, tools)
+- **Account snapshots** — periodic and event-driven account state capture with equity curve visualization. Configurable snapshot intervals and carry-forward for gaps
+- **Hot-reload** — enable/disable trading accounts and connectors (Telegram, MCP Ask) at runtime without restart
+- **Web UI** — local chat interface with real-time SSE streaming, sub-channels with per-channel AI config, portfolio dashboard with equity curve, and full config management. Dynamic broker config forms rendered from broker-declared schemas
 
 ## Key Concepts
 
 **Provider** — The AI backend that powers Alice. Claude (via `@anthropic-ai/claude-agent-sdk`, supports OAuth login or API key) or Vercel AI SDK (direct API calls to Anthropic, OpenAI, Google). Switchable at runtime via `ai-provider.json`.
 
-**Extension** — A self-contained tool package registered in ToolCenter. Each extension owns its tools, state, and persistence. Examples: trading, brain, analysis-kit.
+**Domain** — Business logic layer (`src/domain/`). Each domain module (trading, market-data, analysis, news, brain, thinking) owns its state and persistence. **Tool** (`src/tool/`) is a thin bridge layer that registers domain capabilities as AI tools in ToolCenter.
 
-**UTA (Unified Trading Account)** — The core business entity for trading. Each UTA owns a broker connection (`IBroker`), a git-like operation history (`TradingGit`), and a guard pipeline. Think of it as a git repository for trades — multiple UTAs are like a monorepo with independent histories. AI and the frontend interact with UTAs exclusively; brokers are internal implementation details. All types (Contract, Order, Execution, OrderState) come from IBKR's type system via `@traderalice/ibkr`. `AccountManager` owns the full UTA lifecycle (create, reconnect, enable/disable, remove).
+**UTA (Unified Trading Account)** — The core business entity for trading. Each UTA owns a broker connection (`IBroker`), a git-like operation history (`TradingGit`), a guard pipeline, and a snapshot scheduler. Think of it as a git repository for trades — multiple UTAs are like a monorepo with independent histories. AI and the frontend interact with UTAs exclusively; brokers are internal implementation details. All types (Contract, Order, Execution, OrderState) come from IBKR's type system via `@traderalice/ibkr`. `AccountManager` owns the full UTA lifecycle (create, reconnect, enable/disable, remove).
 
 **Trading-as-Git** — The workflow inside each UTA. Stage operations (`stagePlaceOrder`, `stageClosePosition`, etc.), commit with a message, then push to execute. Push runs guards, dispatches to the broker, snapshots account state, and records a commit with an 8-char hash. Full history is reviewable via `tradingLog` / `tradingShow`.
 
@@ -77,13 +78,14 @@ graph LR
     CCR[ConnectorCenter]
   end
 
-  subgraph Extensions
-    OBB[OpenBB Data]
-    AK[Analysis Kit]
+  subgraph Domain
+    MD[Market Data]
+    AN[Analysis]
     subgraph UTA[Unified Trading Account]
       TR[Trading Git]
       GD[Guards]
       BK[Brokers]
+      SN[Snapshots]
     end
     NC[News Collector]
     BR[Brain]
@@ -108,9 +110,9 @@ graph LR
   TC -->|Vercel tools| VS
   TC -->|in-process MCP| AS
   TC -->|MCP tools| MCP
-  OBB --> AK
-  OBB --> NC
-  AK --> TC
+  MD --> AN
+  MD --> NC
+  AN --> TC
   GD --> TR
   TR --> BK
   UTA --> TC
@@ -129,9 +131,9 @@ graph LR
 
 **Providers** — interchangeable AI backends. Claude (Agent SDK) uses `@anthropic-ai/claude-agent-sdk` with tools delivered via in-process MCP — supports Claude Pro/Max OAuth login or API key. Vercel AI SDK runs a `ToolLoopAgent` in-process with direct API calls. `ProviderRouter` reads `ai-provider.json` on each call to select the active backend at runtime.
 
-**Core** — `AgentCenter` is the top-level orchestration center that routes all calls (both stateless and session-aware) through `ProviderRouter`. `ToolCenter` is a centralized tool registry — extensions register tools there, and it exports them in Vercel AI SDK and MCP formats. `EventLog` provides persistent append-only event storage (JSONL) with real-time subscriptions and crash recovery. `ConnectorCenter` tracks which channel the user last spoke through.
+**Core** — `AgentCenter` is the top-level orchestration center that routes all calls (both stateless and session-aware) through `ProviderRouter`. `ToolCenter` is a centralized tool registry — `tool/` files register domain capabilities there, and it exports them in Vercel AI SDK and MCP formats. `EventLog` provides persistent append-only event storage (JSONL) with real-time subscriptions and crash recovery. `ConnectorCenter` tracks which channel the user last spoke through.
 
-**Extensions** — domain-specific tool sets registered in `ToolCenter`. Each extension owns its tools, state, and persistence. The trading extension centers on `UnifiedTradingAccount` (UTA) — each UTA bundles a broker connection, git-like operation history, and guard pipeline into a single entity. Guards enforce pre-execution safety checks (position size limits, trade cooldowns, symbol whitelist) inside each UTA before orders reach the broker. `NewsCollector` runs background RSS fetches into a persistent archive searchable by the agent.
+**Domain** — business logic modules registered as AI tools via the `tool/` bridge layer. The trading domain centers on `UnifiedTradingAccount` (UTA) — each UTA bundles a broker connection, git-like operation history, guard pipeline, and snapshot scheduler into a single entity. Guards enforce pre-execution safety checks (position size limits, trade cooldowns, symbol whitelist) inside each UTA before orders reach the broker. Snapshots capture periodic account state for equity curve tracking. `NewsCollector` runs background RSS fetches into a persistent archive searchable by the agent.
 
 **Tasks** — scheduled background work. `CronEngine` manages jobs and fires `cron.fire` events into the EventLog on schedule; a listener picks them up, runs them through `AgentCenter`, and delivers replies via `ConnectorCenter`. `Heartbeat` is a periodic health-check that uses a structured response protocol (HEARTBEAT_OK / CHAT_NO / CHAT_YES).
 
@@ -179,6 +181,7 @@ All config lives in `data/config/` as JSON files with Zod validation. Missing fi
 | `tools.json` | Tool enable/disable configuration |
 | `market-data.json` | Data backend (`typebb-sdk` / `openbb-api`), per-asset-class providers, provider API keys, embedded HTTP server config |
 | `news.json` | RSS feeds, fetch interval, retention period |
+| `snapshot.json` | Account snapshot interval and retention |
 | `compaction.json` | Context window limits, auto-compaction thresholds |
 | `heartbeat.json` | Heartbeat enable/disable, interval, active hours |
 
@@ -197,55 +200,60 @@ On first run, defaults are auto-copied to the user override path. Edit the user 
 src/
   main.ts                    # Composition root — wires everything together
   core/
-    agent-center.ts          # Top-level AI orchestration center, owns ProviderRouter
-    ai-provider.ts           # AIProvider interface + ProviderRouter (runtime switching)
+    agent-center.ts          # Top-level AI orchestration, owns ProviderRouter
+    ai-provider-manager.ts   # GenerateRouter + StreamableResult + AskOptions
     tool-center.ts           # Centralized tool registry (Vercel + MCP export)
-    ai-config.ts             # Runtime provider config read/write
-    model-factory.ts         # Model instance factory for Vercel AI SDK
     session.ts               # JSONL session store + format converters
     compaction.ts            # Auto-summarize long context windows
-    config.ts                # Zod-validated config loader
-    event-log.ts             # Persistent append-only event log (JSONL)
+    config.ts                # Zod-validated config loader (generic account schema with brokerConfig)
+    ai-config.ts             # Runtime AI provider selection
+    event-log.ts             # Append-only JSONL event log
     connector-center.ts      # ConnectorCenter — push delivery + last-interacted tracking
     async-channel.ts         # AsyncChannel for streaming provider events to SSE
-    provider-utils.ts        # Shared provider utilities (session conversion, tool bridging)
-    media.ts                 # MediaAttachment extraction from tool outputs
+    model-factory.ts         # Model instance factory for Vercel AI SDK
+    media.ts                 # MediaAttachment extraction
     media-store.ts           # Media file persistence
     types.ts                 # Plugin, EngineContext interfaces
   ai-providers/
     vercel-ai-sdk/           # Vercel AI SDK ToolLoopAgent wrapper
     agent-sdk/               # Claude backend (@anthropic-ai/claude-agent-sdk, OAuth + API key)
-  extension/
-    analysis-kit/            # Indicator calculator and market data tools
-    equity/                  # Equity fundamentals and data adapter
-    market/                  # Unified symbol search across equity, crypto, currency
-    news/                    # RSS collector, archive search tools
-    trading/                 # Unified Trading Account (UTA): brokers, git-like commits, guards, AI tool adapter
-      UnifiedTradingAccount.ts  # UTA class — owns broker + git + guards
-      account-manager.ts     # UTA lifecycle management (init, reconnect, enable/disable, remove) + registry
-      git-persistence.ts     # Git state load/save (commit history to disk)
-      brokers/               # IBroker interface + implementations
-        registry.ts          # Broker type registry (self-registration with config schema + UI fields)
-        factory.ts           # AccountConfig → IBroker (delegates to registry)
-        alpaca/              # Alpaca broker (US equities)
-        ccxt/                # CCXT broker (100+ crypto exchanges)
-        ibkr/                # Interactive Brokers (TWS/Gateway, callback→Promise bridge)
+  domain/
+    trading/                 # Unified multi-account trading, guard pipeline, git-like commits
+      UnifiedTradingAccount.ts  # UTA class — owns broker + git + guards + snapshots
+      account-manager.ts     # UTA lifecycle (init, reconnect, enable/disable) + registry
+      git-persistence.ts     # Git state load/save
+      brokers/
+        registry.ts          # Broker self-registration (configSchema + configFields + fromConfig)
+        alpaca/              # Alpaca (US equities)
+        ccxt/                # CCXT (100+ crypto exchanges)
+        ibkr/                # Interactive Brokers (TWS/Gateway)
         mock/                # In-memory test broker
       git/                   # Trading-as-Git engine (stage → commit → push)
       guards/                # Pre-execution safety checks (position size, cooldown, whitelist)
-    thinking-kit/            # Reasoning and calculation tools
+      snapshot/              # Periodic + event-driven account state capture, equity curve
+    market-data/             # Structured data layer (typebb in-process + OpenBB API remote)
+      equity/                # Equity data + SymbolIndex (SEC/TMX local cache)
+      crypto/                # Crypto data layer
+      currency/              # Currency/forex data layer
+      commodity/             # Commodity data layer (EIA, spot prices)
+      economy/               # Macro economy data layer
+      client/                # Data backend clients (typebb SDK, openbb-api)
+    analysis/                # Indicators, technical analysis
+    news/                    # RSS collector + archive search
     brain/                   # Cognitive state (memory, emotion)
-    browser/                 # Browser automation bridge (via OpenClaw)
-  openbb/
-    sdk/                     # In-process opentypebb SDK clients (equity, crypto, currency, news, economy, commodity)
-    api-server.ts            # Embedded OpenBB-compatible HTTP server (optional, port 6901)
-    equity/                  # Equity data layer + SymbolIndex (SEC/TMX local cache)
-    crypto/                  # Crypto data layer
-    currency/                # Currency/forex data layer
-    commodity/               # Commodity data layer (EIA, spot prices)
-    economy/                 # Macro economy data layer
-    news/                    # News data layer
-    credential-map.ts        # Maps config key names to OpenBB credential field names
+    thinking/                # Safe expression evaluator
+  tool/                      # AI tool definitions — thin bridge from domain to ToolCenter
+    trading.ts               # Trading tools (delegates to domain/trading)
+    equity.ts                # Equity fundamental tools (uses domain/market-data)
+    market.ts                # Symbol search tools (uses domain/market-data)
+    analysis.ts              # Indicator calculation tools (uses domain/analysis)
+    news.ts                  # News archive tools (uses domain/news)
+    brain.ts                 # Cognition tools (uses domain/brain)
+    thinking.ts              # Reasoning tools (uses domain/thinking)
+    browser.ts               # Browser automation tools (wraps openclaw)
+  server/
+    mcp.ts                   # MCP protocol server
+    opentypebb.ts            # Embedded OpenBB-compatible HTTP API (optional)
   connectors/
     web/                     # Web UI chat (Hono, SSE streaming, sub-channels)
     telegram/                # Telegram bot (grammY, polling, commands)
@@ -253,31 +261,30 @@ src/
   task/
     cron/                    # Cron scheduling (engine, listener, AI tools)
     heartbeat/               # Periodic heartbeat with structured response protocol
-  plugins/
-    mcp.ts                   # MCP server for tool exposure
-  skills/                    # Agent skill definitions
-  openclaw/                  # Browser automation subsystem (frozen)
+  openclaw/                  # ⚠️ Frozen — DO NOT MODIFY
 data/
   config/                    # JSON configuration files
-  default/                   # Factory defaults (persona, heartbeat prompts)
   sessions/                  # JSONL conversation histories
   brain/                     # Agent memory and emotion logs
   cache/                     # API response caches
-  trading/                   # Trading commit history (per-account)
+  trading/                   # Trading commit history + snapshots (per-account)
   news-collector/            # Persistent news archive (JSONL)
   cron/                      # Cron job definitions (jobs.json)
   event-log/                 # Persistent event log (events.jsonl)
+  tool-calls/                # Tool invocation logs
+  media/                     # Uploaded attachments
+default/                     # Factory defaults (persona, heartbeat prompts)
 docs/                        # Architecture documentation
 ```
 
 ## Roadmap to v1
 
-Open Alice is in pre-release. The following items must land before the first stable version:
+Open Alice is in pre-release. All planned v1 milestones are now complete — remaining work is testing and stabilization.
 
-- [ ] **Tool confirmation** — sensitive tools (order placement, cancellation, position close) require explicit user confirmation before execution, with a per-tool bypass mechanism for trusted workflows
-- [ ] **Trading-as-Git stable interface** — the UTA class and git workflow are functional; remaining work is serialization format (FIX-like tag-value encoding for Operation persistence) and the `tradingSync` polling loop
+- [x] **Tool confirmation** — achieved through Trading-as-Git's push approval mechanism. Order execution requires explicit user approval at the push step, similar to merging a PR
+- [x] **Trading-as-Git stable interface** — the core workflow (stage → commit → push → approval) is stable and running in production
 - [x] **IBKR broker** — Interactive Brokers integration via TWS/Gateway. `IbkrBroker` bridges the callback-based `@traderalice/ibkr` SDK to the Promise-based `IBroker` interface via `RequestBridge`. Supports all IBroker methods including conId-based contract resolution
-- [ ] **Account snapshot & analytics** — unified trading account snapshots with P&L breakdown, exposure analysis, and historical performance tracking
+- [x] **Account snapshot & analytics** — periodic and event-driven snapshots with equity curve visualization, configurable intervals, and carry-forward for data gaps
 
 ## Star History
 
