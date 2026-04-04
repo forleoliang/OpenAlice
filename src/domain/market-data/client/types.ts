@@ -32,3 +32,34 @@ export interface CurrencyClientLike {
   getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
 }
 
+export interface EtfClientLike {
+  search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getInfo(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getHoldings(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getSectors(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getCountries(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getEquityExposure(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+}
+
+export interface IndexClientLike {
+  getAvailable(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  search(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getConstituents(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getSnapshots(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getSectors(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getSP500Multiples(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getRiskPremium(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+}
+
+export interface DerivativesClientLike {
+  getFuturesHistorical(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getFuturesCurve(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getFuturesInfo(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getFuturesInstruments(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getOptionsChains(params: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getOptionsSnapshots(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+  getOptionsUnusual(params?: Record<string, unknown>): Promise<Record<string, unknown>[]>
+}
+
