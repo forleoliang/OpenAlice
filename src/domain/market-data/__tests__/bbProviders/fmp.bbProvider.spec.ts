@@ -87,3 +87,9 @@ describe('fmp — index', () => {
   // SP500Multiples — registered in multpl provider, not fmp
   it('RiskPremium', async () => { expect((await exec('RiskPremium')).length).toBeGreaterThan(0) })
 })
+
+describe('fmp — commodity', () => {
+  beforeEach(({ skip }) => { if (!hasCredential(ctx.credentials, 'fmp')) skip('no fmp_api_key') })
+
+  it('CommoditySpotPrice', async () => { expect((await exec('CommoditySpotPrice', { symbol: 'GCUSD' })).length).toBeGreaterThan(0) })
+})

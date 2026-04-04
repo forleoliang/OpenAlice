@@ -14,7 +14,7 @@ const PROVIDER_OPTIONS: Record<string, string[]> = {
   equity: ['yfinance', 'fmp', 'intrinio'],
   crypto: ['yfinance', 'fmp'],
   currency: ['yfinance', 'fmp'],
-  commodity: ['yfinance'],
+  commodity: ['yfinance', 'fmp'],
 }
 
 const ASSET_LABELS: Record<string, string> = {

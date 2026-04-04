@@ -72,6 +72,7 @@ import { FMPDiscoveryFilingsFetcher } from './models/discovery-filings.js'
 import { FMPEsgScoreFetcher } from './models/esg-score.js'
 import { FMPHistoricalMarketCapFetcher } from './models/historical-market-cap.js'
 import { FMPEquitySearchFetcher } from './models/equity-search.js'
+import { FMPCommoditySpotPriceFetcher } from './models/commodity-spot-price.js'
 
 export const fmpProvider = new Provider({
   name: 'fmp',
@@ -148,5 +149,6 @@ export const fmpProvider = new Provider({
     DiscoveryFilings: FMPDiscoveryFilingsFetcher,
     EsgScore: FMPEsgScoreFetcher,
     HistoricalMarketCap: FMPHistoricalMarketCapFetcher,
+    CommoditySpotPrice: FMPCommoditySpotPriceFetcher,
   },
 })
