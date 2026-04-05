@@ -10,7 +10,7 @@ import { askAgentSdk } from '../../ai-providers/agent-sdk/query.js'
 import type { AgentSdkConfig } from '../../ai-providers/agent-sdk/query.js'
 import { SessionStore } from '../../core/session'
 import { forceCompact } from '../../core/compaction'
-import { readAIBackend, writeAIBackend, type AIBackend } from '../../core/config'
+import { readAIBackend, writeAIBackend, readConnectorsConfig, type AIBackend } from '../../core/config'
 import type { ConnectorCenter } from '../../core/connector-center.js'
 import { TelegramConnector, splitMessage, MAX_MESSAGE_LENGTH } from './telegram-connector.js'
 
@@ -34,6 +34,7 @@ export class TelegramPlugin implements Plugin {
 
   /** Throttle: last time we sent an auth-guidance reply per chatId. */
   private authReplyThrottle = new Map<number, number>()
+  private webPort = 3002
 
   constructor(
     config: Omit<TelegramConfig, 'pollingTimeout'> & { pollingTimeout?: number },
@@ -45,6 +46,7 @@ export class TelegramPlugin implements Plugin {
 
   async start(engineCtx: EngineContext) {
     this.connectorCenter = engineCtx.connectorCenter
+    this.webPort = engineCtx.config.connectors.web.port
 
     // Inject agent config into Claude Code config (used by /compact command)
     this.agentSdkConfig = {
@@ -63,19 +65,21 @@ export class TelegramPlugin implements Plugin {
       console.error('telegram bot error:', err)
     })
 
-    // ── Middleware: auth guard (always active) ──
+    // ── Middleware: auth guard (hot-reloads chatIds from connectors.json) ──
     bot.use(async (ctx, next) => {
       const chatId = ctx.chat?.id
       if (!chatId) return
-      if (this.config.allowedChatIds.includes(chatId)) return next()
+      const { telegram } = await readConnectorsConfig()
+      if (telegram.chatIds.includes(chatId)) return next()
 
       // Unauthorized — log chat ID for operator, throttle reply (60s)
       const now = Date.now()
       const last = this.authReplyThrottle.get(chatId) ?? 0
       if (now - last > 60_000) {
         this.authReplyThrottle.set(chatId, now)
-        console.log(`telegram: unauthorized chat ${chatId}, set TELEGRAM_CHAT_ID=${chatId} to allow`)
-        await ctx.reply('This chat is not authorized. Add this chat ID to TELEGRAM_CHAT_ID in your environment config.').catch(() => {})
+        const link = `http://localhost:${this.webPort}/connectors?addChatId=${chatId}`
+        console.log(`telegram: unauthorized chat ${chatId}, authorize via ${link}`)
+        await ctx.reply(`To authorize this chat, open:\n${link}`).catch(() => {})
       }
     })
 
@@ -239,7 +243,7 @@ export class TelegramPlugin implements Plugin {
         // Route through AgentCenter → GenerateRouter → active provider
         const session = await this.getSession(message.from.id)
         const result = await engineCtx.agentCenter.askWithSession(prompt, session, {
-          historyPreamble: 'The following is the recent conversation from this Telegram chat. Use it as context if the user references earlier messages.',
+          historyPreamble: `You are operating via Telegram (session: telegram/${message.from.id}). The following is the recent conversation.`,
         })
         stopTyping()
         await this.sendReplyWithPlaceholder(message.chatId, result.text, result.media, placeholder?.message_id)
