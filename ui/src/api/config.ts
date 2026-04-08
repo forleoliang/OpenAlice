@@ -49,7 +49,7 @@ export const configApi = {
   },
 
   async updateProfile(slug: string, profile: Profile): Promise<{ slug: string; profile: Profile }> {
-    const res = await fetch(`/api/config/profiles/${slug}`, {
+    const res = await fetch(`/api/config/profiles/${encodeURIComponent(slug)}`, {
       method: 'PUT',
       headers,
       body: JSON.stringify(profile),
@@ -62,7 +62,7 @@ export const configApi = {
   },
 
   async deleteProfile(slug: string): Promise<void> {
-    const res = await fetch(`/api/config/profiles/${slug}`, { method: 'DELETE' })
+    const res = await fetch(`/api/config/profiles/${encodeURIComponent(slug)}`, { method: 'DELETE' })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Failed to delete profile' }))
       throw new Error(err.error || 'Failed to delete profile')
@@ -70,7 +70,7 @@ export const configApi = {
   },
 
   async testProfile(slug: string): Promise<{ ok: boolean; response?: string; error?: string }> {
-    const res = await fetch(`/api/config/profiles/${slug}/test`, { method: 'POST' })
+    const res = await fetch(`/api/config/profiles/${encodeURIComponent(slug)}/test`, { method: 'POST' })
     return res.json()
   },
 

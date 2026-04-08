@@ -72,14 +72,14 @@ export const CLAUDE_API: PresetDef = {
   writeOnlyFields: ['apiKey'],
 }
 
-// ==================== Official: OpenAI / Codex ====================
+// ==================== Official: OpenAI Codex ====================
 
 export const CODEX_OAUTH: PresetDef = {
   id: 'codex-oauth',
-  label: 'OpenAI / Codex (Subscription)',
+  label: 'OpenAI Codex (Subscription)',
   description: 'Use your ChatGPT subscription',
   category: 'official',
-  defaultName: 'OpenAI / Codex (Subscription)',
+  defaultName: 'OpenAI Codex (Subscription)',
   hint: 'Requires Codex CLI login. Run `codex login` in your terminal first.',
   zodSchema: z.object({
     backend: z.literal('codex'),
