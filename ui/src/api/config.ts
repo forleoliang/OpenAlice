@@ -1,5 +1,5 @@
 import { headers } from './client'
-import type { AppConfig, Profile } from './types'
+import type { AppConfig, Profile, Preset } from './types'
 
 export const configApi = {
   async load(): Promise<AppConfig> {
@@ -22,6 +22,12 @@ export const configApi = {
   },
 
   // ==================== Profile CRUD ====================
+
+  async getPresets(): Promise<{ presets: Preset[] }> {
+    const res = await fetch('/api/config/presets')
+    if (!res.ok) throw new Error('Failed to load presets')
+    return res.json()
+  },
 
   async getProfiles(): Promise<{ profiles: Record<string, Profile>; activeProfile: string }> {
     const res = await fetch('/api/config/profiles')

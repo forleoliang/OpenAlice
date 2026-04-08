@@ -12,6 +12,35 @@ export interface Profile {
   apiKey?: string
 }
 
+// ==================== AI Provider Presets ====================
+
+export interface PresetModelOption {
+  id: string
+  label: string
+}
+
+export interface PresetField<T = string> {
+  value: T
+  locked: boolean
+  hidden?: boolean
+  required?: boolean
+}
+
+export interface Preset {
+  id: string
+  label: string
+  description: string
+  category: 'official' | 'third-party' | 'custom'
+  backend: PresetField<AIBackend>
+  loginMethod?: PresetField
+  provider?: PresetField
+  baseUrl?: PresetField
+  apiKey?: PresetField
+  models: PresetModelOption[]
+  defaultModel?: string
+  modelOptional?: boolean
+}
+
 // ==================== Channels ====================
 
 export interface WebChannel {

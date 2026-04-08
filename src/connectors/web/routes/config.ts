@@ -5,6 +5,7 @@ import {
   profileSchema, type ConfigSection, type Profile,
 } from '../../../core/config.js'
 import type { EngineContext } from '../../../core/types.js'
+import { BUILTIN_PRESETS } from '../../../ai-providers/presets.js'
 
 interface ConfigRouteOpts {
   onConnectorsChange?: () => Promise<void>
@@ -107,6 +108,9 @@ export function createConfigRoutes(opts?: ConfigRouteOpts) {
       return c.json({ error: String(err) }, 500)
     }
   })
+
+  /** GET /presets — built-in preset templates for profile creation */
+  app.get('/presets', (c) => c.json({ presets: BUILTIN_PRESETS }))
 
   app.get('/api-keys/status', async (c) => {
     try {
