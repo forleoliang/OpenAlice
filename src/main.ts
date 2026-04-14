@@ -172,7 +172,7 @@ async function main() {
     equityClient = new OpenBBEquityClient(url, providers.equity, keys)
     cryptoClient = new OpenBBCryptoClient(url, providers.crypto, keys)
     currencyClient = new OpenBBCurrencyClient(url, providers.currency, keys)
-    commodityClient = new OpenBBCommodityClient(url, providers.equity, keys)
+    commodityClient = new OpenBBCommodityClient(url, providers.commodity, keys)
   } else {
     const executor = getSDKExecutor()
     const routeMap = buildRouteMap()
@@ -180,7 +180,7 @@ async function main() {
     equityClient = new SDKEquityClient(executor, 'equity', providers.equity, credentials, routeMap)
     cryptoClient = new SDKCryptoClient(executor, 'crypto', providers.crypto, credentials, routeMap)
     currencyClient = new SDKCurrencyClient(executor, 'currency', providers.currency, credentials, routeMap)
-    commodityClient = new SDKCommodityClient(executor, 'commodity', providers.equity, credentials, routeMap)
+    commodityClient = new SDKCommodityClient(executor, 'commodity', providers.commodity, credentials, routeMap)
     etfClient = new SDKEtfClient(executor, 'etf', providers.equity, credentials, routeMap)
     indexClient = new SDKIndexClient(executor, 'index', providers.equity, credentials, routeMap)
     derivativesClient = new SDKDerivativesClient(executor, 'derivatives', providers.equity, credentials, routeMap)
