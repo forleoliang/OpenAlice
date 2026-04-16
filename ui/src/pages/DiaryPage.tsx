@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, type ChatHistoryItem } from '../api'
 import type { DiaryCycle, DiaryOutcome } from '../api/diary'
 import { ToolCallGroup } from '../components/ChatMessage'
@@ -242,7 +242,7 @@ export function DiaryPage() {
 
   // Render: walk groups and emit a date divider whenever the calendar day changes.
   const rendered = useMemo(() => {
-    const nodes: Array<{ key: string; render: () => JSX.Element }> = []
+    const nodes: Array<{ key: string; render: () => ReactNode }> = []
     let lastDay: Date | null = null
     const now = new Date()
 
