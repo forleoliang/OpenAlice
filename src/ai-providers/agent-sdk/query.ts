@@ -85,6 +85,35 @@ function stripImageData(raw: string): string {
   } catch { return raw }
 }
 
+// ==================== Error classification ====================
+
+type ErrorClass = 'auth' | 'model' | 'unknown'
+
+const AUTH_PATTERNS = [
+  /\b401\b/,
+  /\binvalid[_\s-]?api[_\s-]?key\b/i,
+  /\bauthentication\b/i,
+  /\bunauthor(?:ized|ised)\b/i,
+  /\bpermission[_\s-]denied\b/i,
+  /\bx-api-key\b/i,
+]
+
+const MODEL_PATTERNS = [
+  /\bmodel[_\s-]not[_\s-]found\b/i,
+  /\binvalid[_\s-]?model\b/i,
+  /\bunknown[_\s-]?model\b/i,
+  /\bmodel\s+.+?\s+(?:does\s+not\s+exist|is\s+not\s+(?:a\s+)?valid)\b/i,
+]
+
+function classifyError(details: Record<string, unknown>): ErrorClass {
+  const haystack = [details.message, details.stderr, details.stdout]
+    .filter((x): x is string => typeof x === 'string')
+    .join('\n')
+  if (AUTH_PATTERNS.some(p => p.test(haystack))) return 'auth'
+  if (MODEL_PATTERNS.some(p => p.test(haystack))) return 'model'
+  return 'unknown'
+}
+
 // ==================== Public ====================
 
 /**
@@ -217,8 +246,18 @@ export async function askAgentSdk(
           resultText = result.errors?.join('\n') ?? `Agent SDK error: ${result.subtype}`
           // Log failed results with all available detail
           const resultDetail = { subtype: result.subtype, errors: result.errors, result: result.result }
-          logger.error({ ...resultDetail, turns: result.num_turns, durationMs: result.duration_ms }, 'result_error')
-          console.error('[agent-sdk] Non-success result:', resultDetail)
+          const classification = classifyError({
+            message: resultText,
+            stderr: Array.isArray(result.errors) ? result.errors.join('\n') : undefined,
+          })
+          logger.error({ ...resultDetail, classification, turns: result.num_turns, durationMs: result.duration_ms }, 'result_error')
+          if (classification === 'auth') {
+            console.warn('[agent-sdk] Auth failed — check your API key / baseUrl in the active profile')
+          } else if (classification === 'model') {
+            console.warn('[agent-sdk] Model not available on this endpoint — check the region / model combo')
+          } else {
+            console.error('[agent-sdk] Non-success result:', resultDetail)
+          }
         }
         logger.info({ subtype: result.subtype, turns: result.num_turns, durationMs: result.duration_ms }, 'result')
       }
@@ -238,9 +277,16 @@ export async function askAgentSdk(
     const extraKeys = Object.keys(errObj).filter(k => !(k in details))
     for (const k of extraKeys) details[k] = (errObj as any)[k]
 
-    logger.error(details, 'query_error')
-    // Also log to console so the developer can see it in the terminal
-    console.error('[agent-sdk] Claude Code process error:', details)
+    const classification = classifyError(details)
+    logger.error({ ...details, classification }, 'query_error')
+    if (classification === 'auth') {
+      // User-fixable: don't scream, just hint. Full detail already in logs/agent-sdk.log.
+      console.warn('[agent-sdk] Auth failed — check your API key / baseUrl in the active profile')
+    } else if (classification === 'model') {
+      console.warn('[agent-sdk] Model not available on this endpoint — check the region / model combo')
+    } else {
+      console.error('[agent-sdk] Claude Code process error:', details)
+    }
     ok = false
     const stderrHint = details.stderr ? `\nstderr: ${details.stderr}` : ''
     resultText = `Agent SDK error: ${errObj.message}${stderrHint}`
