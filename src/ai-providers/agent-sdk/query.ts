@@ -7,6 +7,7 @@
 
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk'
 import type { McpSdkServerConfigWithInstance } from '@anthropic-ai/claude-agent-sdk'
+import { createWriteStream, mkdirSync } from 'node:fs'
 import { pino } from 'pino'
 import type { ContentBlock } from '../../core/session.js'
 
@@ -164,6 +165,21 @@ export async function askAgentSdk(
   const baseUrl = override?.baseUrl
   if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl
 
+  // Opt-in debug: set ALICE_SDK_DEBUG=1 to turn on the SDK's verbose stderr
+  // + capture every child-process stderr chunk into logs/agent-sdk-debug.log.
+  // This is what surfaces the actual outbound HTTP URLs the CLI hits.
+  const debugEnabled = process.env.ALICE_SDK_DEBUG === '1'
+  let debugStream: ReturnType<typeof createWriteStream> | null = null
+  if (debugEnabled) {
+    env.DEBUG_CLAUDE_AGENT_SDK = '1'
+    try { mkdirSync('logs', { recursive: true }) } catch { /* ok */ }
+    debugStream = createWriteStream('logs/agent-sdk-debug.log', { flags: 'a' })
+    debugStream.write(
+      `\n===== ${new Date().toISOString()} | ` +
+      `loginMethod=${loginMethod} model=${override?.model} baseUrl=${baseUrl ?? '(default)'} =====\n`,
+    )
+  }
+
   // MCP servers
   const mcpServers: Record<string, any> = {}
   if (mcpServer) {
@@ -190,6 +206,7 @@ export async function askAgentSdk(
         allowDangerouslySkipPermissions: true,
         persistSession: false,
         ...(loginMethod === 'claudeai' ? { forceLoginMethod: 'claudeai' as const } : {}),
+        ...(debugStream ? { stderr: (chunk: string) => debugStream!.write(chunk) } : {}),
       },
     })) {
       // assistant message — extract tool_use + text blocks
@@ -259,7 +276,20 @@ export async function askAgentSdk(
             console.error('[agent-sdk] Non-success result:', resultDetail)
           }
         }
-        logger.info({ subtype: result.subtype, turns: result.num_turns, durationMs: result.duration_ms }, 'result')
+        // Full result metadata — surfaces the model the server actually ran,
+        // so we can verify provider routing against the configured profile.
+        const modelUsed = result.model ?? result.response?.model ?? result.usage?.model
+        logger.info({
+          subtype: result.subtype,
+          model: modelUsed,
+          usage: result.usage,
+          totalCostUsd: result.total_cost_usd,
+          sessionId: result.session_id,
+          turns: result.num_turns,
+          durationMs: result.duration_ms,
+        }, 'result')
+        const usageStr = result.usage ? ` in=${result.usage.input_tokens ?? '?'} out=${result.usage.output_tokens ?? '?'}` : ''
+        console.info(`[agent-sdk] result: model=${modelUsed ?? '(unreported)'} subtype=${result.subtype}${usageStr}`)
       }
     }
   } catch (err) {
@@ -290,6 +320,8 @@ export async function askAgentSdk(
     ok = false
     const stderrHint = details.stderr ? `\nstderr: ${details.stderr}` : ''
     resultText = `Agent SDK error: ${errObj.message}${stderrHint}`
+  } finally {
+    debugStream?.end()
   }
 
   // Fallback: if result is empty, extract last assistant text
