@@ -22,6 +22,9 @@ const ALIAS_DICT: Record<string, string> = {
   open: 'regularMarketOpen',
   volume: 'regularMarketVolume',
   prev_close: 'regularMarketPreviousClose',
+  change: 'regularMarketChange',
+  change_percent: 'regularMarketChangePercent',
+  last_timestamp: 'regularMarketTime',
   year_high: 'fiftyTwoWeekHigh',
   year_low: 'fiftyTwoWeekLow',
   // ma50 / ma200 match the canonical names used by FMP; keeps cross-provider
