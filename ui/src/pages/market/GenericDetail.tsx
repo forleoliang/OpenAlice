@@ -28,7 +28,7 @@ export function GenericDetail({ symbol, assetClass }: Props) {
         <KlinePanel selection={{ symbol, assetClass }} />
       </div>
 
-      <TradeableContractsPanel symbol={symbol} />
+      <TradeableContractsPanel symbol={symbol} assetClass={assetClass} />
     </div>
   )
 }

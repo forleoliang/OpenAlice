@@ -180,9 +180,17 @@ export const tradingApi = {
    * Heuristic broker-side search across all configured accounts. Used by the
    * Market workbench to surface tradeable contracts matching a data-vendor
    * symbol — the bridge is intentionally fuzzy / display-only.
+   *
+   * `assetClass` lets the backend pick the right normalization rule (e.g.
+   * crypto/currency strip the quote-currency suffix). See
+   * `src/domain/trading/contract-search-rules.md` for the rule set.
    */
-  async searchContracts(pattern: string): Promise<ContractSearchResponse> {
+  async searchContracts(
+    pattern: string,
+    assetClass?: 'equity' | 'crypto' | 'currency' | 'commodity',
+  ): Promise<ContractSearchResponse> {
     const qs = new URLSearchParams({ pattern })
+    if (assetClass) qs.set('assetClass', assetClass)
     return fetchJson(`/api/trading/contracts/search?${qs}`)
   },
 

@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { tradingApi, type ContractSearchHit } from '../../api/trading'
+import type { AssetClass } from '../../api/market'
 import { Card } from './Card'
 
 interface Props {
   /** The data-vendor symbol the user is currently viewing. */
   symbol: string
+  /** Asset class hint forwarded to the broker-side search rule set. */
+  assetClass: AssetClass
 }
 
 /**
@@ -16,7 +19,7 @@ interface Props {
  * on this, where would I do it?" — and so we get a non-AI inspection
  * window into UTA contract state for debugging.
  */
-export function TradeableContractsPanel({ symbol }: Props) {
+export function TradeableContractsPanel({ symbol, assetClass }: Props) {
   const [hits, setHits] = useState<ContractSearchHit[] | null>(null)
   const [accountsConfigured, setAccountsConfigured] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
@@ -26,7 +29,7 @@ export function TradeableContractsPanel({ symbol }: Props) {
     let cancelled = false
     setLoading(true)
     setError(null)
-    tradingApi.searchContracts(symbol)
+    tradingApi.searchContracts(symbol, assetClass)
       .then((res) => {
         if (cancelled) return
         setHits(res.results)
@@ -35,7 +38,7 @@ export function TradeableContractsPanel({ symbol }: Props) {
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [symbol])
+  }, [symbol, assetClass])
 
   const info = [
     'Endpoint: /api/trading/contracts/search',

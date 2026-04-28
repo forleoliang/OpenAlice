@@ -23,7 +23,7 @@ export function EquityDetail({ symbol }: Props) {
         <KeyMetricsPanel symbol={symbol} />
       </div>
 
-      <TradeableContractsPanel symbol={symbol} />
+      <TradeableContractsPanel symbol={symbol} assetClass="equity" />
 
       <FinancialStatementsPanel symbol={symbol} />
     </div>
