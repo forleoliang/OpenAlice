@@ -15,6 +15,10 @@
 
 import type { ContractDescription } from '@traderalice/ibkr'
 import type { AccountManager } from './account-manager.js'
+import {
+  normalizeBrokerSearchPattern,
+  type AssetClassHint,
+} from './contract-search-rules.js'
 
 export interface ContractSearchHit {
   /** UTA account id that the contract lives on (e.g. "alpaca-paper"). */
@@ -26,7 +30,14 @@ export interface ContractSearchHit {
 export async function searchTradeableContracts(
   manager: AccountManager,
   pattern: string,
+  assetClass: AssetClassHint = 'unknown',
 ): Promise<ContractSearchHit[]> {
+  // Translate data-vendor symbol to a broker-friendly pattern. The rule set
+  // and its rationale live in `./contract-search-rules.md` — read that
+  // before changing what gets normalized.
+  const brokerPattern = normalizeBrokerSearchPattern(pattern, assetClass)
+  if (!brokerPattern) return []
+
   const targets = manager.resolve()
   if (targets.length === 0) return []
 
@@ -35,7 +46,7 @@ export async function searchTradeableContracts(
   // whole sweep — the original AI tool used try/catch in a for-loop for the
   // same reason. Promise.allSettled lets it run concurrently.
   const settled = await Promise.allSettled(
-    targets.map(async (uta) => ({ id: uta.id, results: await uta.searchContracts(pattern) })),
+    targets.map(async (uta) => ({ id: uta.id, results: await uta.searchContracts(brokerPattern) })),
   )
   for (const r of settled) {
     if (r.status !== 'fulfilled') continue
