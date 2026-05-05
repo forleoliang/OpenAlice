@@ -1,42 +1,47 @@
-import { Link, useLocation } from 'react-router-dom'
+import { useWorkspace } from '../tabs/store'
+import { getFocusedTab, type ViewSpec } from '../tabs/types'
+
+type DevTab = Extract<ViewSpec, { kind: 'dev' }>['params']['tab']
 
 interface CategoryItem {
   label: string
-  to: string
+  tab: DevTab
 }
 
 const CATEGORIES: CategoryItem[] = [
-  { label: 'Connectors', to: '/dev/connectors' },
-  { label: 'Tools', to: '/dev/tools' },
-  { label: 'Sessions', to: '/dev/sessions' },
-  { label: 'Snapshots', to: '/dev/snapshots' },
-  { label: 'Logs', to: '/dev/logs' },
+  { label: 'Connectors', tab: 'connectors' },
+  { label: 'Tools', tab: 'tools' },
+  { label: 'Sessions', tab: 'sessions' },
+  { label: 'Snapshots', tab: 'snapshots' },
+  { label: 'Logs', tab: 'logs' },
 ]
 
 /**
- * Dev secondary sidebar — replaces the in-page tab bar with URL-routed
- * sub-pages. Each tab becomes its own /dev/:tab route so they can be
- * bookmarked and survive refresh.
+ * Dev sidebar — five sub-pages, click opens (or focuses) the
+ * corresponding dev tab. Active highlight is driven by the focused tab's
+ * spec.
  */
 export function DevCategoryList() {
-  const location = useLocation()
+  const focused = useWorkspace((state) => getFocusedTab(state)?.spec)
+  const openOrFocus = useWorkspace((state) => state.openOrFocus)
 
   return (
     <div className="py-0.5">
       {CATEGORIES.map((item) => {
-        const active = location.pathname === item.to
+        const active = focused?.kind === 'dev' && focused.params.tab === item.tab
         return (
-          <Link
-            key={item.to}
-            to={item.to}
-            className={`flex items-center gap-1 px-3 py-1 text-[13px] transition-colors ${
+          <button
+            key={item.tab}
+            type="button"
+            onClick={() => openOrFocus({ kind: 'dev', params: { tab: item.tab } })}
+            className={`w-full text-left flex items-center gap-1 px-3 py-1 text-[13px] transition-colors ${
               active
                 ? 'bg-bg-tertiary text-text'
                 : 'text-text-muted hover:text-text hover:bg-bg-tertiary/50'
             }`}
           >
             <span className="truncate">{item.label}</span>
-          </Link>
+          </button>
         )
       })}
     </div>

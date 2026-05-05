@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
 import { Section } from '../components/form'
 import { PageHeader } from '../components/PageHeader'
 import { Spinner, EmptyState } from '../components/StateViews'
@@ -17,11 +16,11 @@ import {
   type ExecuteResult,
 } from '../api/tools'
 import { api, type UTASnapshotSummary } from '../api'
+import type { ViewSpec } from '../tabs/types'
 
 // ==================== Tab Types ====================
 
-const VALID_TABS = ['connectors', 'tools', 'sessions', 'snapshots', 'logs'] as const
-type Tab = typeof VALID_TABS[number]
+type Tab = Extract<ViewSpec, { kind: 'dev' }>['params']['tab']
 
 const TAB_TITLES: Record<Tab, string> = {
   connectors: 'Connectors',
@@ -36,11 +35,12 @@ const SELF_SCROLLING_TABS: ReadonlySet<Tab> = new Set(['tools', 'logs'])
 
 // ==================== DevPage ====================
 
-export function DevPage() {
-  const { tab: tabParam } = useParams<{ tab?: string }>()
-  const tab: Tab = (VALID_TABS as readonly string[]).includes(tabParam ?? '')
-    ? (tabParam as Tab)
-    : 'connectors'
+interface DevPageProps {
+  spec: Extract<ViewSpec, { kind: 'dev' }>
+}
+
+export function DevPage({ spec }: DevPageProps) {
+  const tab = spec.params.tab
 
   return (
     <div className="flex flex-col flex-1 min-h-0">

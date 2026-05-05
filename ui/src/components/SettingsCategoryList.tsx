@@ -1,52 +1,56 @@
-import { Link, useLocation } from 'react-router-dom'
+import { useWorkspace } from '../tabs/store'
+import { getFocusedTab, type ViewSpec } from '../tabs/types'
+
+type SettingsCategory = Extract<ViewSpec, { kind: 'settings' }>['params']['category']
 
 interface CategoryItem {
-  /** Display label */
   label: string
-  /** Canonical route the link navigates to. Active on exact match. */
-  to: string
-  /** Extra prefixes that also count as "active" (sub-routes like /settings/uta/:id under Trading Accounts). */
-  prefixes?: string[]
+  category: SettingsCategory
+  /**
+   * Other view kinds that count as "active" for this row. Used by
+   * Trading Accounts: when a uta-detail tab is focused, Trading
+   * Accounts should still light up.
+   */
+  alsoActiveFor?: ViewSpec['kind'][]
 }
 
 const CATEGORIES: CategoryItem[] = [
-  { label: 'General', to: '/settings' },
-  { label: 'AI Provider', to: '/settings/ai-provider' },
-  { label: 'Trading Accounts', to: '/settings/trading', prefixes: ['/settings/uta'] },
-  { label: 'Connectors', to: '/settings/connectors' },
-  { label: 'Market Data', to: '/settings/market-data' },
-  { label: 'News Sources', to: '/settings/news-collector' },
+  { label: 'General', category: 'general' },
+  { label: 'AI Provider', category: 'ai-provider' },
+  { label: 'Trading Accounts', category: 'trading', alsoActiveFor: ['uta-detail'] },
+  { label: 'Connectors', category: 'connectors' },
+  { label: 'Market Data', category: 'market-data' },
+  { label: 'News Sources', category: 'news-collector' },
 ]
 
 /**
- * Settings sidebar content — flat list of config categories.
- * Active on exact pathname match for `to`, plus any pathname under `prefixes` (used
- * for things like Trading Accounts → /settings/uta/:id sub-routes).
- *
- * Note: General's `to` is `/settings` and intentionally has no prefixes so it
- * doesn't light up when other settings sub-pages are active.
+ * Settings sidebar — flat list of config categories. Click opens (or
+ * focuses) the corresponding tab. Active highlight is driven by the
+ * currently-focused tab's spec, not by URL.
  */
 export function SettingsCategoryList() {
-  const location = useLocation()
+  const focused = useWorkspace((state) => getFocusedTab(state)?.spec)
+  const openOrFocus = useWorkspace((state) => state.openOrFocus)
 
   return (
     <div className="py-0.5">
       {CATEGORIES.map((item) => {
         const active =
-          location.pathname === item.to ||
-          (item.prefixes?.some((p) => location.pathname.startsWith(p + '/')) ?? false)
+          (focused?.kind === 'settings' && focused.params.category === item.category) ||
+          (item.alsoActiveFor != null && focused != null && item.alsoActiveFor.includes(focused.kind))
         return (
-          <Link
-            key={item.to}
-            to={item.to}
-            className={`flex items-center gap-1 px-3 py-1 text-[13px] transition-colors ${
+          <button
+            key={item.category}
+            type="button"
+            onClick={() => openOrFocus({ kind: 'settings', params: { category: item.category } })}
+            className={`w-full text-left flex items-center gap-1 px-3 py-1 text-[13px] transition-colors ${
               active
                 ? 'bg-bg-tertiary text-text'
                 : 'text-text-muted hover:text-text hover:bg-bg-tertiary/50'
             }`}
           >
             <span className="truncate">{item.label}</span>
-          </Link>
+          </button>
         )
       })}
     </div>

@@ -3,20 +3,33 @@ import { useChat } from '../hooks/useChat'
 import { useChannels } from '../contexts/ChannelsContext'
 import { ChatMessage, ToolCallGroup, ThinkingIndicator, StreamingToolGroup } from '../components/ChatMessage'
 import { ChatInput } from '../components/ChatInput'
+import type { ViewSpec } from '../tabs/types'
 
-export function ChatPage() {
-  const { channels, activeChannel } = useChannels()
+interface ChatPageProps {
+  spec: Extract<ViewSpec, { kind: 'chat' }>
+  /**
+   * True when this tab is the visible one. Used to fire a catch-up
+   * scroll-to-bottom when the tab becomes visible after being hidden —
+   * `el.scrollHeight` is 0 while `display: none` so any auto-scroll fired
+   * during that period is a no-op.
+   */
+  visible: boolean
+}
+
+export function ChatPage({ spec, visible }: ChatPageProps) {
+  const channelId = spec.params.channelId
+  const { channels } = useChannels()
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const [newMsgCount, setNewMsgCount] = useState(0)
 
   const { messages, streamSegments, isWaiting, send, abort, loadMore, hasMore, isLoadingMore } = useChat({
-    channel: activeChannel,
+    channel: channelId,
   })
 
   const userScrolledUp = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const activeChannelConfig = channels.find((ch) => ch.id === activeChannel)
+  const activeChannelConfig = channels.find((ch) => ch.id === channelId)
 
   // Auto-scroll to bottom. Uses container.scrollTop (not Element.scrollIntoView)
   // because scrollIntoView walks up the DOM and scrolls every ancestor scroller
@@ -34,6 +47,17 @@ export function ChatPage() {
   }, [])
 
   useEffect(scrollToBottom, [messages, isWaiting, streamSegments, scrollToBottom])
+
+  // Catch-up: when the tab becomes visible after being hidden, snap to
+  // bottom — any scrollToBottom calls fired while hidden were no-ops
+  // because `display: none` zeroes scrollHeight.
+  useEffect(() => {
+    if (!visible) return
+    const el = containerRef.current
+    if (!el) return
+    if (userScrolledUp.current) return
+    el.scrollTop = el.scrollHeight
+  }, [visible])
 
   // After a load-more prepend finishes laying out, re-anchor scrollTop to
   // the same visual position. Without this the viewport jumps because
@@ -158,7 +182,7 @@ export function ChatPage() {
                   draggable={false}
                 />
                 <div className="text-center">
-                  <h2 className="text-lg font-semibold text-text mb-1">{activeChannelConfig?.label ?? activeChannel}</h2>
+                  <h2 className="text-lg font-semibold text-text mb-1">{activeChannelConfig?.label ?? channelId}</h2>
                   <p className="text-sm text-text-muted">Send a message to start chatting</p>
                 </div>
               </div>

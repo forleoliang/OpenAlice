@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { api } from '../api'
 import type { ChannelListItem } from '../api/channels'
+import { useWorkspace } from '../tabs/store'
 
 /** Channel-config dialog mode (create new vs edit existing). */
 export type ChannelDialog =
@@ -10,9 +11,7 @@ export type ChannelDialog =
 
 interface ChannelsContextValue {
   channels: ChannelListItem[]
-  activeChannel: string
   channelDialog: ChannelDialog
-  selectChannel: (id: string) => void
   openCreateDialog: () => void
   openEditDialog: (channel: ChannelListItem) => void
   closeDialog: () => void
@@ -26,20 +25,18 @@ const ChannelsContext = createContext<ChannelsContextValue | null>(null)
 /**
  * App-level provider for chat-channel state.
  *
- * Lives above the route layer so channels list / active channel / dialog state
- * survive navigation across sections (you don't refetch channels every time you
- * pop in and out of /chat).
+ * Holds the channel list and the create/edit dialog state. The notion of
+ * "active channel" lives in the workspace store now — each chat tab carries
+ * its own channelId in its ViewSpec, so there's no app-wide singleton.
  */
 export function ChannelsProvider({ children }: { children: ReactNode }) {
   const [channels, setChannels] = useState<ChannelListItem[]>([])
-  const [activeChannel, setActiveChannel] = useState('default')
   const [channelDialog, setChannelDialog] = useState<ChannelDialog>(null)
 
   useEffect(() => {
     api.channels.list().then(({ channels: ch }) => setChannels(ch)).catch(() => {})
   }, [])
 
-  const selectChannel = useCallback((id: string) => setActiveChannel(id), [])
   const openCreateDialog = useCallback(() => setChannelDialog({ mode: 'create' }), [])
   const openEditDialog = useCallback((channel: ChannelListItem) => setChannelDialog({ mode: 'edit', channel }), [])
   const closeDialog = useCallback(() => setChannelDialog(null), [])
@@ -48,7 +45,10 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
     try {
       await api.channels.remove(id)
       setChannels((prev) => prev.filter((ch) => ch.id !== id))
-      setActiveChannel((curr) => (curr === id ? 'default' : curr))
+      // Close any open chat tab pointing at the now-deleted channel.
+      useWorkspace.getState().closeMatching(
+        (spec) => spec.kind === 'chat' && spec.params.channelId === id,
+      )
     } catch (err) {
       console.error('Failed to delete channel:', err)
     }
@@ -59,18 +59,21 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
       const exists = prev.some((ch) => ch.id === saved.id)
       return exists ? prev.map((ch) => ch.id === saved.id ? saved : ch) : [...prev, saved]
     })
-    // Newly created channels become active immediately.
+    // For create-mode saves, open the new channel as a fresh tab and focus it.
     setChannelDialog((dialog) => {
-      if (dialog?.mode === 'create') setActiveChannel(saved.id)
+      if (dialog?.mode === 'create') {
+        useWorkspace.getState().openOrFocus({
+          kind: 'chat',
+          params: { channelId: saved.id },
+        })
+      }
       return null
     })
   }, [])
 
   const value: ChannelsContextValue = {
     channels,
-    activeChannel,
     channelDialog,
-    selectChannel,
     openCreateDialog,
     openEditDialog,
     closeDialog,

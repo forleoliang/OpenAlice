@@ -1,34 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { ActivityBar } from './components/ActivityBar'
 import { Sidebar } from './components/Sidebar'
+import { TabHost } from './components/TabHost'
 import { ChannelConfigModal } from './components/ChannelConfigModal'
 import { ChannelsProvider, useChannels } from './contexts/ChannelsContext'
-import { SECTIONS, STANDALONE_ROUTES, REDIRECT_ROUTES, findActiveSection } from './sections'
+import { findSectionForKind } from './sections'
+import { UrlAdopter } from './tabs/UrlAdopter'
+import { useWorkspace } from './tabs/store'
+import { getFocusedTab } from './tabs/types'
 
 /**
  * Activity-bar pages — only items that appear as icons in the ActivityBar.
- * Settings sub-pages (AI Provider, Trading Accounts, etc.) live under
- * /settings/* and are addressed via SettingsCategoryList, not via this enum.
+ * Each maps to one or more tab kinds via tabs/registry.ts (defaultSpecForActivity).
  */
 export type Page =
   | 'chat' | 'diary' | 'portfolio' | 'news' | 'automation' | 'market'
   | 'trading-as-git'
   | 'settings' | 'dev'
-
-/** Page type → URL path mapping. Used by the activity bar to know where each icon links. */
-export const ROUTES: Record<Page, string> = {
-  'chat': '/chat',
-  'diary': '/diary',
-  'portfolio': '/portfolio',
-  'automation': '/automation',
-  'market': '/market',
-  'news': '/news',
-  'trading-as-git': '/trading-as-git',
-  'settings': '/settings',
-  'dev': '/dev',
-}
 
 /** Track whether we're at a desktop viewport (md+ in Tailwind = ≥768px). */
 function useIsDesktop(): boolean {
@@ -55,8 +44,8 @@ export function App() {
 
 function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const location = useLocation()
-  const section = findActiveSection(location.pathname)
+  const focusedKind = useWorkspace((state) => getFocusedTab(state)?.spec.kind ?? null)
+  const section = findSectionForKind(focusedKind)
   const isDesktop = useIsDesktop()
   const showSidebarPanel = isDesktop && section != null
 
@@ -76,8 +65,6 @@ function AppShell() {
     ? { sidebar: 14, main: 86 }
     : { main: 100 }
 
-  // Main content (mobile header + routes). Same JSX whether or not a sidebar
-  // is visible — keeps Routes mounted in one place so navigation state survives.
   const mainContent = (
     <main className="flex flex-col min-w-0 min-h-0 bg-bg h-full">
       {/* Mobile header — visible only below md */}
@@ -94,20 +81,7 @@ function AppShell() {
         <span className="text-sm font-semibold text-text">OpenAlice</span>
       </div>
 
-      <div key={location.pathname} className="page-fade-in flex-1 flex flex-col min-h-0">
-        <Routes>
-          {SECTIONS.flatMap((s) => s.routes).map((r) => (
-            <Route key={r.path} path={r.path} element={r.element} />
-          ))}
-          {STANDALONE_ROUTES.map((r) => (
-            <Route key={r.path} path={r.path} element={r.element} />
-          ))}
-          {REDIRECT_ROUTES.map((r) => (
-            <Route key={r.path} path={r.path} element={r.element} />
-          ))}
-          <Route path="*" element={<Navigate to="/chat" replace />} />
-        </Routes>
-      </div>
+      <TabHost />
     </main>
   )
 
@@ -140,6 +114,7 @@ function AppShell() {
         </Panel>
       </Group>
 
+      <UrlAdopter />
       <ChannelDialogMount />
     </div>
   )

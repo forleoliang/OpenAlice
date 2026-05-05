@@ -1,6 +1,8 @@
 import { type ReactNode } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { type Page, ROUTES } from '../App'
+import { type Page } from '../App'
+import { useWorkspace } from '../tabs/store'
+import { getFocusedTab } from '../tabs/types'
+import { defaultSpecForActivity, getView } from '../tabs/registry'
 
 interface ActivityBarProps {
   open: boolean
@@ -138,34 +140,16 @@ const NAV_SECTIONS: NavSection[] = [
 
 // ==================== Helpers ====================
 
-/**
- * Routes that live inside the Settings sidebar. The Settings activity-bar
- * icon highlights as active for any pathname under /settings.
- */
-const SETTINGS_GROUPED_ROUTES = ['/settings']
-
-export function isSettingsGroupedRoute(pathname: string): boolean {
-  return SETTINGS_GROUPED_ROUTES.some((r) => pathname === r || pathname.startsWith(r + '/'))
-}
-
-/** Derive active page from current URL path */
-function pathToPage(pathname: string): Page | null {
-  for (const [page, path] of Object.entries(ROUTES) as [Page, string][]) {
-    if (path === pathname) return page
-    // Match root path for chat
-    if (page === 'chat' && pathname === '/') return 'chat'
-  }
-  return null
-}
-
 /** Style for active indicator */
 const INDICATOR_STYLE = { background: '#58a6ff' }
 
 // ==================== ActivityBar ====================
 
 export function ActivityBar({ open, onClose }: ActivityBarProps) {
-  const location = useLocation()
-  const currentPage = pathToPage(location.pathname)
+  const focusedKind = useWorkspace((state) => getFocusedTab(state)?.spec.kind ?? null)
+  const openOrFocus = useWorkspace((state) => state.openOrFocus)
+  // Derived: which activity icon should light up given the focused tab's kind.
+  const activeIcon = focusedKind ? getView(focusedKind).activityIcon : null
 
   return (
     <>
@@ -210,16 +194,17 @@ export function ActivityBar({ open, onClose }: ActivityBarProps) {
               )}
               <div className="flex flex-col gap-0.5">
                 {section.items.map((item) => {
-                  const isActive = item.page === 'settings'
-                    ? isSettingsGroupedRoute(location.pathname)
-                    : item.page === 'dev'
-                    ? location.pathname === '/dev' || location.pathname.startsWith('/dev/')
-                    : currentPage === item.page
+                  const isActive = activeIcon === item.page
+                  const handleClick = () => {
+                    onClose()
+                    const spec = defaultSpecForActivity(item.page)
+                    if (spec) openOrFocus(spec)
+                  }
                   return (
-                    <Link
+                    <button
                       key={item.page}
-                      to={ROUTES[item.page]}
-                      onClick={onClose}
+                      type="button"
+                      onClick={handleClick}
                       title={item.label}
                       className={`relative flex items-center gap-3 px-3 py-2 md:px-0 md:py-2.5 md:rounded-none md:justify-center rounded-lg text-sm transition-colors text-left ${
                         isActive
@@ -235,7 +220,7 @@ export function ActivityBar({ open, onClose }: ActivityBarProps) {
                       />
                       <span className={`flex items-center justify-center w-5 h-5 ${isActive ? 'md:text-text' : ''}`}>{item.icon(isActive)}</span>
                       <span className="md:hidden">{item.label}</span>
-                    </Link>
+                    </button>
                   )
                 })}
               </div>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import type { ViewSpec } from '../tabs/types'
 import { api } from '../api'
 import type { UTAConfig, BrokerPreset, AccountInfo, Position, BrokerHealthInfo, UTASnapshotSummary } from '../api/types'
 import { useTradingConfig } from '../hooks/useTradingConfig'
@@ -15,8 +16,12 @@ import { SnapshotDetail } from '../components/SnapshotDetail'
 
 // ==================== Page ====================
 
-export function UTADetailPage() {
-  const { id } = useParams<{ id: string }>()
+interface UTADetailPageProps {
+  spec: Extract<ViewSpec, { kind: 'uta-detail' }>
+}
+
+export function UTADetailPage({ spec }: UTADetailPageProps) {
+  const id = spec.params.id
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const tc = useTradingConfig()
