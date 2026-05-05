@@ -88,6 +88,16 @@ export interface Position {
    * shares"), not a math input. Consumers must NOT re-apply.
    */
   multiplier?: string
+  /**
+   * Provenance of `avgCost`:
+   * - `'broker'`: broker reported it directly (Alpaca avg_entry_price,
+   *   IBKR EWrapper, CCXT derivative entryPrice). Authoritative.
+   * - `'wallet'`: broker has no real cost basis (e.g. CCXT spot synthesized
+   *   from fetchBalance) — UTA must reconstruct from Alice's git log,
+   *   bootstrapping unknown qty via reconcileBalance at observed markPrice.
+   * Undefined defaults to `'broker'` (current behavior, back-compat).
+   */
+  avgCostSource?: 'broker' | 'wallet'
 }
 
 // ==================== Order result ====================

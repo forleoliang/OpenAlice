@@ -564,6 +564,10 @@ export class TelegramPlugin implements Plugin {
         return `CANCEL order ${op.orderId}`
       case 'syncOrders':
         return 'SYNC orders'
+      case 'reconcileBalance': {
+        const dir = op.quantityDelta.gte(0) ? 'OBSERVED' : 'RELEASED'
+        return `${dir} ${symbol} ${op.quantityDelta.abs().toFixed()} @${op.markPrice.toFixed()}`
+      }
     }
   }
 

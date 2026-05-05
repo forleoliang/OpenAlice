@@ -25,6 +25,17 @@ export type Operation =
   | { action: 'closePosition'; contract: Contract; quantity?: Decimal }
   | { action: 'cancelOrder'; orderId: string; orderCancel?: OrderCancel }
   | { action: 'syncOrders' }
+  | {
+      // Wallet-only event: bridges the gap between Alice's order log and a
+      // broker-reported balance change Alice did not initiate (first-sight
+      // bootstrap, external transfer, staking reward, off-platform trade).
+      // Treated as a virtual market buy/sell at observed price for cost-basis
+      // purposes — sign of quantityDelta determines direction.
+      action: 'reconcileBalance'
+      aliceId: string
+      quantityDelta: Decimal
+      markPrice: Decimal
+    }
 
 // ==================== Operation Result ====================
 
@@ -212,5 +223,6 @@ export function getOperationSymbol(op: Operation): string {
     case 'closePosition': return op.contract?.symbol || op.contract?.aliceId || 'unknown'
     case 'cancelOrder': return 'unknown'
     case 'syncOrders': return 'unknown'
+    case 'reconcileBalance': return op.aliceId
   }
 }

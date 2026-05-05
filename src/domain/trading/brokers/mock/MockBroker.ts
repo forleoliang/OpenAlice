@@ -31,6 +31,8 @@ interface InternalPosition {
   side: 'long' | 'short'
   quantity: Decimal
   avgCost: Decimal
+  avgCostSource?: 'broker' | 'wallet'
+  marketPriceOverride?: Decimal
 }
 
 interface InternalOrder {
@@ -355,9 +357,10 @@ export class MockBroker implements IBroker {
     this._checkFail('getPositions')
     const result: Position[] = []
     for (const pos of this._positions.values()) {
-      const price = this._quotes.has(pos.contract.symbol ?? '')
-        ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
-        : pos.avgCost
+      const price = pos.marketPriceOverride
+        ?? (this._quotes.has(pos.contract.symbol ?? '')
+          ? new Decimal(this._quotes.get(pos.contract.symbol ?? '')!)
+          : pos.avgCost)
       result.push({
         contract: pos.contract,
         currency: pos.contract.currency || 'USD',
@@ -368,6 +371,7 @@ export class MockBroker implements IBroker {
         marketValue: pos.quantity.mul(price).toString(),
         unrealizedPnL: pos.quantity.mul(price.minus(pos.avgCost)).toString(),
         realizedPnL: '0',
+        ...(pos.avgCostSource && { avgCostSource: pos.avgCostSource }),
       })
     }
     return result
@@ -459,6 +463,8 @@ export class MockBroker implements IBroker {
         side: p.side,
         quantity: p.quantity,
         avgCost: new Decimal(p.avgCost),
+        ...(p.avgCostSource && { avgCostSource: p.avgCostSource }),
+        marketPriceOverride: new Decimal(p.marketPrice),
       })
     }
   }

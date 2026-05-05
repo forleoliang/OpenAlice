@@ -543,9 +543,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
    * reflects only their stablecoin balance.
    *
    * Treated as long positions priced at the current ticker — consistent
-   * with how IBKR exposes equity holdings. avgCost is set to markPrice
-   * because reconstructing historic fill cost would require fetchMyTrades,
-   * which is too expensive for a snapshot path.
+   * with how IBKR exposes equity holdings. avgCost is filled with markPrice
+   * as a placeholder; UTA replaces it with a wallet-ledger-derived value
+   * (and bootstraps any unaccounted qty via `reconcileBalance` at observed
+   * markPrice) — the `avgCostSource: 'wallet'` flag signals this.
    */
   private async fetchSpotHoldings(prefetched?: Awaited<ReturnType<Exchange['fetchBalance']>>): Promise<Position[]> {
     const balance = prefetched ?? await this.exchange.fetchBalance()
@@ -617,12 +618,13 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         currency: normalizeQuoteCurrency(h.market.quote ?? 'USDT'),
         side: 'long',
         quantity: h.quantity,
-        // markPrice as cost basis — historic cost would need fetchMyTrades
+        // Placeholder — UTA will replace via wallet-ledger reconstruction.
         avgCost: markPrice.toString(),
         marketPrice: markPrice.toString(),
         marketValue: marketValue.toString(),
         unrealizedPnL: '0',
         realizedPnL: '0',
+        avgCostSource: 'wallet',
       })
     }
 
@@ -733,6 +735,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
           marketValue: marketValue.toString(),
           unrealizedPnL: unrealizedPnL.toString(),
           realizedPnL: new Decimal(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)).toString(),
+          avgCostSource: 'broker',
         })
       }
 

@@ -775,3 +775,147 @@ describe('UTA — health tracking', () => {
     expect(uta.health).toBe('healthy')
   })
 })
+
+// ==================== Wallet cost-basis reconciliation ====================
+
+describe('UTA — getPositions wallet reconciliation', () => {
+  it('passes through positions with avgCostSource=broker untouched', async () => {
+    const broker = new MockBroker()
+    broker.setPositions([makePosition({ avgCostSource: 'broker', avgCost: '150', marketPrice: '160', unrealizedPnL: '100' })])
+    const { uta } = createUTA(broker)
+    const positions = await uta.getPositions()
+    expect(positions[0].avgCost).toBe('150')
+    expect(positions[0].unrealizedPnL).toBe('100')
+  })
+
+  it('passes through positions without avgCostSource (back-compat)', async () => {
+    const broker = new MockBroker()
+    broker.setPositions([makePosition({ avgCost: '150', marketPrice: '160', unrealizedPnL: '100' })])
+    const { uta } = createUTA(broker)
+    const positions = await uta.getPositions()
+    expect(positions[0].avgCost).toBe('150')
+    expect(positions[0].unrealizedPnL).toBe('100')
+  })
+
+  it('bootstraps a wallet position with no history → reconcile at markPrice, PnL=0', async () => {
+    const broker = new MockBroker()
+    broker.setPositions([makePosition({
+      contract: makeContract({ symbol: 'BTC' }),
+      quantity: new Decimal('1.0093'),
+      avgCost: '80569.90',
+      marketPrice: '80569.90',
+      unrealizedPnL: '0',
+      avgCostSource: 'wallet',
+    })])
+    const { uta } = createUTA(broker)
+
+    const positions = await uta.getPositions()
+    expect(new Decimal(positions[0].avgCost).toNumber()).toBeCloseTo(80569.90, 4)
+    expect(positions[0].unrealizedPnL).toBe('0')
+
+    // Synthetic reconcile commit was created
+    const commits = uta.git.exportState().commits
+    const reconciles = commits.filter(c => c.operations.some(op => op.action === 'reconcileBalance'))
+    expect(reconciles).toHaveLength(1)
+    const op = reconciles[0].operations[0] as Extract<Operation, { action: 'reconcileBalance' }>
+    expect(op.aliceId).toBe('mock-paper|BTC')
+    expect(op.quantityDelta.toNumber()).toBeCloseTo(1.0093, 4)
+  })
+
+  it('uses markPrice drift to compute true PnL after first observation', async () => {
+    const broker = new MockBroker()
+    broker.setPositions([makePosition({
+      contract: makeContract({ aliceId: 'mock-paper|BTC' }),
+      quantity: new Decimal('1'),
+      avgCost: '80000',  // placeholder = markPrice on first sight
+      marketPrice: '80000',
+      unrealizedPnL: '0',
+      avgCostSource: 'wallet',
+    })])
+    const { uta } = createUTA(broker)
+    await uta.getPositions()  // bootstrap
+
+    // Price moves up. avgCost should stay at the bootstrap price; PnL reflects change.
+    broker.setPositions([makePosition({
+      contract: makeContract({ aliceId: 'mock-paper|BTC' }),
+      quantity: new Decimal('1'),
+      avgCost: '90000',  // broker placeholder updates to current markPrice
+      marketPrice: '90000',
+      unrealizedPnL: '0',
+      avgCostSource: 'wallet',
+    })])
+    const positions = await uta.getPositions()
+    expect(new Decimal(positions[0].avgCost).toNumber()).toBe(80000)
+    expect(new Decimal(positions[0].unrealizedPnL).toNumber()).toBe(10000)
+  })
+
+  it('reconciles upward drift: broker reports more qty than git projects', async () => {
+    const broker = new MockBroker()
+    broker.setPositions([makePosition({
+      contract: makeContract({ aliceId: 'mock-paper|BTC' }),
+      quantity: new Decimal('1'),
+      avgCost: '80000',
+      marketPrice: '80000',
+      avgCostSource: 'wallet',
+    })])
+    const { uta } = createUTA(broker)
+    await uta.getPositions()  // first sight: bootstrap 1 BTC @ 80k
+
+    // External deposit: broker now reports 1.5 BTC. markPrice climbed to 100k.
+    broker.setPositions([makePosition({
+      contract: makeContract({ aliceId: 'mock-paper|BTC' }),
+      quantity: new Decimal('1.5'),
+      avgCost: '100000',
+      marketPrice: '100000',
+      avgCostSource: 'wallet',
+    })])
+    const positions = await uta.getPositions()
+
+    // WAC over (1@80k bootstrap, 0.5@100k drift) = (80000 + 50000) / 1.5 ≈ 86666.67
+    expect(new Decimal(positions[0].avgCost).toNumber()).toBeCloseTo(86666.67, 2)
+    // PnL = (100000 - 86666.67) * 1.5 ≈ 20000
+    expect(new Decimal(positions[0].unrealizedPnL).toNumber()).toBeCloseTo(20000, 0)
+  })
+
+  it('does not synthesize reconcile for sub-dust drift', async () => {
+    const broker = new MockBroker()
+    broker.setPositions([makePosition({
+      contract: makeContract({ aliceId: 'mock-paper|BTC' }),
+      quantity: new Decimal('1'),
+      avgCost: '80000',
+      marketPrice: '80000',
+      avgCostSource: 'wallet',
+    })])
+    const { uta } = createUTA(broker)
+    await uta.getPositions()  // bootstrap commit 1
+
+    // Same qty (modulo dust) — no new commit should be added.
+    broker.setPositions([makePosition({
+      contract: makeContract({ aliceId: 'mock-paper|BTC' }),
+      quantity: new Decimal('1.000000001'),
+      avgCost: '80000',
+      marketPrice: '80000',
+      avgCostSource: 'wallet',
+    })])
+    const before = uta.git.exportState().commits.length
+    await uta.getPositions()
+    const after = uta.git.exportState().commits.length
+    expect(after).toBe(before)
+  })
+
+  it('skips positions without aliceId (defensive)', async () => {
+    const broker = new MockBroker()
+    const contract = makeContract()
+    contract.aliceId = ''  // simulate broker that didn't stamp
+    broker.setPositions([makePosition({
+      contract,
+      quantity: new Decimal('1'),
+      avgCost: '50000',
+      marketPrice: '60000',
+      avgCostSource: 'wallet',
+    })])
+    const { uta } = createUTA(broker)
+    // UTA's stampAliceId will fill it, but if broker emits without symbol/contract id we fall through cleanly.
+    await expect(uta.getPositions()).resolves.toBeDefined()
+  })
+})

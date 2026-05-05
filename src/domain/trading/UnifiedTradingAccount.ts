@@ -11,6 +11,7 @@ import Decimal from 'decimal.js'
 import { Contract, Order, ContractDescription, ContractDetails, UNSET_DECIMAL } from '@traderalice/ibkr'
 import { BrokerError, type IBroker, type AccountInfo, type Position, type OpenOrder, type PlaceOrderResult, type Quote, type MarketClock, type AccountCapabilities, type BrokerHealth, type BrokerHealthInfo, type TpSlParams } from './brokers/types.js'
 import { TradingGit } from './git/TradingGit.js'
+import { recomputeCostBasisFromCommits } from './cost-basis.js'
 import type {
   Operation,
   AddResult,
@@ -516,7 +517,68 @@ export class UnifiedTradingAccount {
   async getPositions(): Promise<Position[]> {
     const positions = await this._callBroker(() => this.broker.getPositions())
     for (const p of positions) this.stampAliceId(p.contract)
+    await this._reconcileWalletPositions(positions)
     return positions
+  }
+
+  /**
+   * For positions whose broker doesn't supply an authoritative avgCost
+   * (CCXT spot synthesis), reconstruct cost basis from Alice's order log
+   * — bootstrapping any quantity drift via a synthesized `reconcileBalance`
+   * commit at observed markPrice. Mutates `positions` in place: replaces
+   * the placeholder avgCost and recomputes unrealizedPnL.
+   */
+  private async _reconcileWalletPositions(positions: Position[]): Promise<void> {
+    const walletPositions = positions.filter(p => p.avgCostSource === 'wallet')
+    if (walletPositions.length === 0) return
+
+    for (const p of walletPositions) {
+      const aliceId = p.contract.aliceId
+      if (!aliceId) continue
+
+      const commits = this.git.exportState().commits
+      const projected = recomputeCostBasisFromCommits(commits, aliceId)
+      const projectedQty = projected?.qty ?? new Decimal(0)
+      const drift = p.quantity.minus(projectedQty)
+
+      // Tolerance: dust-level differences (sub-1e-8) come from precision
+      // round-trips, not from real balance changes.
+      if (drift.abs().gt(new Decimal('1e-8'))) {
+        await this.git.recordReconcile({
+          aliceId,
+          quantityDelta: drift,
+          markPrice: new Decimal(p.marketPrice),
+          stateAfter: this._buildReconcileStateAfter(positions),
+        })
+      }
+
+      // Recompute (post-reconcile if drift was applied; otherwise unchanged).
+      const finalCommits = this.git.exportState().commits
+      const final = recomputeCostBasisFromCommits(finalCommits, aliceId)
+      if (!final) continue  // Should be unreachable — reconcile would seed it.
+
+      p.avgCost = final.avgCost.toString()
+      const pnl = p.quantity.mul(new Decimal(p.marketPrice).minus(final.avgCost))
+      p.unrealizedPnL = pnl.toString()
+    }
+  }
+
+  /**
+   * Build a minimal GitState for a synthesized reconcile commit. The cost-
+   * basis pipeline doesn't read stateAfter (it walks operations + results),
+   * but the field is required by GitCommit and downstream snapshot code may
+   * inspect it. We avoid recursing through `_getState` (which would refetch
+   * broker positions) by reusing the in-flight positions array.
+   */
+  private _buildReconcileStateAfter(positions: Position[]): GitState {
+    return {
+      netLiquidation: '0',
+      totalCashValue: '0',
+      unrealizedPnL: '0',
+      realizedPnL: '0',
+      positions,
+      pendingOrders: [],
+    }
   }
 
   async getOrders(orderIds: string[]): Promise<OpenOrder[]> {
