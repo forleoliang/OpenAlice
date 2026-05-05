@@ -1,31 +1,22 @@
-import { useState } from 'react'
 import type { ChannelListItem } from '../api/channels'
 
 interface ChatChannelListProps {
   channels: ChannelListItem[]
   activeChannel: string
-  showNewForm: boolean
-  onCloseNewForm: () => void
   onSelect: (id: string) => void
   onEdit: (channel: ChannelListItem) => void
   onDelete: (id: string) => void
-  onCreate: (id: string, label: string) => Promise<void>
 }
 
 export function ChatChannelList({
   channels,
   activeChannel,
-  showNewForm,
-  onCloseNewForm,
   onSelect,
   onEdit,
   onDelete,
-  onCreate,
 }: ChatChannelListProps) {
   return (
     <div className="py-0.5">
-      {showNewForm && <NewChannelForm onCreate={onCreate} onCancel={onCloseNewForm} />}
-
       {channels.map((ch) => {
         // 'default' is editable but not deletable — it's the connector's
         // default-session pointer and must keep existing.
@@ -42,7 +33,7 @@ export function ChatChannelList({
         )
       })}
 
-      {channels.length === 0 && !showNewForm && (
+      {channels.length === 0 && (
         <p className="px-3 py-2 text-[12px] text-text-muted/60">Loading…</p>
       )}
     </div>
@@ -99,68 +90,3 @@ function ChannelRow({ channel, active, onSelect, onEdit, onDelete }: ChannelRowP
   )
 }
 
-interface NewChannelFormProps {
-  onCreate: (id: string, label: string) => Promise<void>
-  onCancel: () => void
-}
-
-function NewChannelForm({ onCreate, onCancel }: NewChannelFormProps) {
-  const [id, setId] = useState('')
-  const [label, setLabel] = useState('')
-  const [error, setError] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-
-  const handleSubmit = async () => {
-    setError('')
-    if (!id.trim() || !label.trim()) {
-      setError('ID and label are required')
-      return
-    }
-    setSubmitting(true)
-    try {
-      await onCreate(id.trim(), label.trim())
-      onCancel()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <div className="px-3 py-2 mx-1 mb-1 space-y-1.5 rounded border border-border bg-bg-tertiary/30">
-      <input
-        type="text"
-        placeholder="id (e.g. research)"
-        value={id}
-        onChange={(e) => setId(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, ''))}
-        className="w-full text-xs px-2 py-1 rounded border border-border bg-bg-secondary text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
-        autoFocus
-      />
-      <input
-        type="text"
-        placeholder="label"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit() }}
-        className="w-full text-xs px-2 py-1 rounded border border-border bg-bg-secondary text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
-      />
-      <div className="flex items-center gap-2">
-        <button
-          onClick={handleSubmit}
-          disabled={submitting}
-          className="text-xs px-2.5 py-1 rounded bg-accent text-white hover:bg-accent/80 disabled:opacity-50 transition-colors"
-        >
-          {submitting ? '...' : 'Create'}
-        </button>
-        <button
-          onClick={onCancel}
-          className="text-xs px-2 py-1 rounded text-text-muted hover:text-text"
-        >
-          Cancel
-        </button>
-      </div>
-      {error && <p className="text-xs text-red-400">{error}</p>}
-    </div>
-  )
-}
