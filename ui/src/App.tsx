@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { Group, Panel, Separator } from 'react-resizable-panels'
+import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { ActivityBar } from './components/ActivityBar'
 import { Sidebar } from './components/Sidebar'
 import { ChannelConfigModal } from './components/ChannelConfigModal'
@@ -60,6 +60,22 @@ function AppShell() {
   const isDesktop = useIsDesktop()
   const showSidebarPanel = isDesktop && section != null
 
+  // Persist the user's resized layout to localStorage. `panelIds` scopes the
+  // saved layout to the current panel set — sidebar+main and main-only get
+  // independent entries, so the sidebar width survives mobile/desktop toggles
+  // and route changes that drop the sidebar.
+  const panelIds = useMemo(
+    () => (showSidebarPanel ? ['sidebar', 'main'] : ['main']),
+    [showSidebarPanel],
+  )
+  const { defaultLayout: savedLayout, onLayoutChanged } = useDefaultLayout({
+    id: 'main-layout',
+    panelIds,
+  })
+  const fallbackLayout: Record<string, number> = showSidebarPanel
+    ? { sidebar: 14, main: 86 }
+    : { main: 100 }
+
   // Main content (mobile header + routes). Same JSX whether or not a sidebar
   // is visible — keeps Routes mounted in one place so navigation state survives.
   const mainContent = (
@@ -99,7 +115,13 @@ function AppShell() {
     <div className="flex h-full">
       <ActivityBar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <Group orientation="horizontal" id="main-layout" className="flex-1 min-h-0">
+      <Group
+        orientation="horizontal"
+        id="main-layout"
+        className="flex-1 min-h-0"
+        defaultLayout={savedLayout ?? fallbackLayout}
+        onLayoutChanged={onLayoutChanged}
+      >
         {showSidebarPanel && section && (
           <>
             <Panel id="sidebar" defaultSize={240} minSize={150} maxSize={500}>
