@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createTradingRoutes } from './trading.js'
-import type { EngineContext } from '../../../core/types.js'
+import type { EngineContext } from '../../core/types.js'
 
 // Stub the UTA + manager just enough that the handler can call through.
 // We capture every call to verify what landed at the staging layer.

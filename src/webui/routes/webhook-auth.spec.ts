@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { checkAuth, extractPresentedToken } from './webhook-auth.js'
-import type { WebhookConfig } from '../../../core/config.js'
+import type { WebhookConfig } from '../../core/config.js'
 
 function cfg(tokens: Array<{ id: string; token: string }>): WebhookConfig {
   return {

@@ -7,11 +7,11 @@
  * all reach the SSE clients in order.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createChannel } from '../../../core/async-channel.js'
+import { createChannel } from '../../core/async-channel.js'
 import {
   StreamableResult,
   type ProviderEvent,
-} from '../../../core/ai-provider-manager.js'
+} from '../../core/ai-provider-manager.js'
 import {
   FakeProvider,
   MemorySessionStore,
@@ -20,25 +20,25 @@ import {
   toolResultEvent,
   textEvent,
   doneEvent,
-} from '../../../core/__tests__/pipeline/helpers.js'
+} from '../../core/__tests__/pipeline/helpers.js'
 import type { SSEClient } from '../routes/chat.js'
 
 // ==================== Module Mocks ====================
 
-vi.mock('../../../core/config.js', () => ({
+vi.mock('../../core/config.js', () => ({
   resolveProfile: vi.fn().mockResolvedValue({ backend: 'vercel-ai-sdk', label: 'Test', model: 'mock', provider: 'anthropic' }),
   readAgentConfig: vi.fn().mockResolvedValue({ maxSteps: 20, evolutionMode: false, claudeCode: { disallowedTools: [], maxTurns: 20 } }),
 }))
 
-vi.mock('../../../core/compaction.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../core/compaction.js')>()
+vi.mock('../../core/compaction.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../core/compaction.js')>()
   return {
     ...actual,
     compactIfNeeded: vi.fn().mockResolvedValue({ compacted: false, method: 'none' }),
   }
 })
 
-vi.mock('../../../core/media-store.js', () => ({
+vi.mock('../../core/media-store.js', () => ({
   persistMedia: vi.fn().mockResolvedValue('2026-03-13/ace-aim-air.png'),
   resolveMediaPath: vi.fn((name: string) => `/mock/media/${name}`),
 }))

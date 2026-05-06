@@ -3,11 +3,11 @@ import { streamSSE } from 'hono/streaming'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { extname, join } from 'node:path'
-import type { EngineContext } from '../../../core/types.js'
-import type { AskOptions } from '../../../core/ai-provider-manager.js'
-import { SessionStore, toChatHistory } from '../../../core/session.js'
-import { readWebSubchannels } from '../../../core/config.js'
-import { resolveMediaPath } from '../../../core/media-store.js'
+import type { EngineContext } from '../../core/types.js'
+import type { AskOptions } from '../../core/ai-provider-manager.js'
+import { SessionStore, toChatHistory } from '../../core/session.js'
+import { readWebSubchannels } from '../../core/config.js'
+import { resolveMediaPath } from '../../core/media-store.js'
 
 export interface SSEClient {
   id: string

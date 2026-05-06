@@ -8,7 +8,7 @@
 
 import { Hono } from 'hono'
 import { readFile } from 'node:fs/promises'
-import type { BrainExportState, BrainCommit } from '../../../domain/brain/index.js'
+import type { BrainExportState, BrainCommit } from '../../domain/brain/index.js'
 
 const BRAIN_FILE = 'data/brain/commit.json'
 

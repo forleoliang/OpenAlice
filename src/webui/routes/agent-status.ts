@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import type { EngineContext } from '../../../core/types.js'
+import type { EngineContext } from '../../core/types.js'
 
 /** Tool call log routes: GET /, GET /recent */
 export function createAgentStatusRoutes(ctx: EngineContext) {

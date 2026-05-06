@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import type { ToolCenter } from '../../../core/tool-center.js'
-import { readToolsConfig, writeConfigSection } from '../../../core/config.js'
-import { extractMcpShape, wrapToolExecute } from '../../../core/mcp-export.js'
+import type { ToolCenter } from '../../core/tool-center.js'
+import { readToolsConfig, writeConfigSection } from '../../core/config.js'
+import { extractMcpShape, wrapToolExecute } from '../../core/mcp-export.js'
 
 /** Tools routes: inventory, detail, execute, enable/disable */
 export function createToolsRoutes(toolCenter: ToolCenter) {

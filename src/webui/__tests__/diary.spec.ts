@@ -13,7 +13,7 @@ import {
   outcomeFromEvent,
   type DiaryOutcome,
 } from '../routes/diary.js'
-import type { EventLogEntry } from '../../../core/event-log.js'
+import type { EventLogEntry } from '../../core/event-log.js'
 
 // ==================== Fixtures ====================
 

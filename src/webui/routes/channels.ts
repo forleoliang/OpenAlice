@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { randomBytes } from 'node:crypto'
-import { SessionStore } from '../../../core/session.js'
-import { readWebSubchannels, writeWebSubchannels } from '../../../core/config.js'
-import type { WebChannel } from '../../../core/types.js'
+import { SessionStore } from '../../core/session.js'
+import { readWebSubchannels, writeWebSubchannels } from '../../core/config.js'
+import type { WebChannel } from '../../core/types.js'
 import type { SSEClient } from './chat.js'
 
 interface ChannelsDeps {

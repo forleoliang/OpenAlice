@@ -13,7 +13,7 @@
 import { Hono } from 'hono'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { ConnectorCenter } from '../../../core/connector-center.js'
+import type { ConnectorCenter } from '../../core/connector-center.js'
 
 export function createDevRoutes(connectorCenter: ConnectorCenter) {
   const app = new Hono()

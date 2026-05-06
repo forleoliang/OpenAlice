@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import type { EngineContext } from '../../../core/types.js'
-import { isExternalEventType, validateEventPayload } from '../../../core/agent-event.js'
-import type { ProducerHandle } from '../../../core/producer.js'
-import { readWebhookConfig } from '../../../core/config.js'
+import type { EngineContext } from '../../core/types.js'
+import { isExternalEventType, validateEventPayload } from '../../core/agent-event.js'
+import type { ProducerHandle } from '../../core/producer.js'
+import { readWebhookConfig } from '../../core/config.js'
 import { checkAuth, extractPresentedToken } from './webhook-auth.js'
 
 interface EventsDeps {

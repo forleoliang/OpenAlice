@@ -13,7 +13,7 @@
  */
 
 import { timingSafeEqual } from 'node:crypto'
-import type { WebhookConfig, WebhookToken } from '../../../core/config.js'
+import type { WebhookConfig, WebhookToken } from '../../core/config.js'
 
 export type AuthResult =
   | { kind: 'ok'; tokenId: string }

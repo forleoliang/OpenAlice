@@ -8,8 +8,8 @@
  */
 
 import { Hono } from 'hono'
-import type { EngineContext } from '../../../core/types.js'
-import { aggregateSymbolSearch } from '../../../domain/market-data/aggregate-search.js'
+import type { EngineContext } from '../../core/types.js'
+import { aggregateSymbolSearch } from '../../domain/market-data/aggregate-search.js'
 
 export function createMarketRoutes(ctx: EngineContext): Hono {
   const app = new Hono()

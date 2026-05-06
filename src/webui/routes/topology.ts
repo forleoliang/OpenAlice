@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
-import type { EngineContext } from '../../../core/types.js'
-import type { AgentEventMap } from '../../../core/agent-event.js'
-import { AgentEvents } from '../../../core/agent-event.js'
+import type { EngineContext } from '../../core/types.js'
+import type { AgentEventMap } from '../../core/agent-event.js'
+import { AgentEvents } from '../../core/agent-event.js'
 
 /**
  * Topology routes: GET /

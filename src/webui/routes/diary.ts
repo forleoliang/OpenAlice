@@ -14,14 +14,14 @@
  */
 
 import { Hono } from 'hono'
-import type { EngineContext } from '../../../core/types.js'
-import { SessionStore, toChatHistory, type ChatHistoryItem } from '../../../core/session.js'
-import type { EventLogEntry } from '../../../core/event-log.js'
+import type { EngineContext } from '../../core/types.js'
+import { SessionStore, toChatHistory, type ChatHistoryItem } from '../../core/session.js'
+import type { EventLogEntry } from '../../core/event-log.js'
 import type {
   HeartbeatDonePayload,
   HeartbeatSkipPayload,
   HeartbeatErrorPayload,
-} from '../../../core/agent-event.js'
+} from '../../core/agent-event.js'
 
 // ==================== Types ====================
 

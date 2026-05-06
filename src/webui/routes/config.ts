@@ -3,9 +3,9 @@ import {
   loadConfig, writeConfigSection, readAIProviderConfig, validSections,
   writeProfile, deleteProfile, setActiveProfile,
   profileSchema, type ConfigSection, type Profile,
-} from '../../../core/config.js'
-import type { EngineContext } from '../../../core/types.js'
-import { BUILTIN_PRESETS } from '../../../ai-providers/presets.js'
+} from '../../core/config.js'
+import type { EngineContext } from '../../core/types.js'
+import { BUILTIN_PRESETS } from '../../ai-providers/presets.js'
 
 interface ConfigRouteOpts {
   ctx?: EngineContext

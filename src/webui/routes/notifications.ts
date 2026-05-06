@@ -11,7 +11,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { randomUUID } from 'node:crypto'
-import type { INotificationsStore, NotificationSource } from '../../../core/notifications-store.js'
+import type { INotificationsStore, NotificationSource } from '../../core/notifications-store.js'
 
 export interface SSEClient {
   id: string

@@ -3,11 +3,11 @@ import { cors } from 'hono/cors'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { resolve } from 'node:path'
-import type { Plugin, EngineContext } from '../../core/types.js'
-import type { ProducerHandle } from '../../core/producer.js'
-import { SessionStore } from '../../core/session.js'
-import { WebConnector } from './web-connector.js'
-import { readWebSubchannels } from '../../core/config.js'
+import type { Plugin, EngineContext } from '../core/types.js'
+import type { ProducerHandle } from '../core/producer.js'
+import { SessionStore } from '../core/session.js'
+import { WebConnector } from '../connectors/web/web-connector.js'
+import { readWebSubchannels } from '../core/config.js'
 import { createChatRoutes, createMediaRoutes, type SSEClient } from './routes/chat.js'
 import { createChannelsRoutes } from './routes/channels.js'
 import { createConfigRoutes, createMarketDataRoutes } from './routes/config.js'
@@ -26,15 +26,15 @@ import { createPersonaRoutes } from './routes/persona.js'
 import { createNewsRoutes } from './routes/news.js'
 import { createMarketRoutes } from './routes/market.js'
 import { createNotificationsRoutes, type SSEClient as NotificationsSSEClient } from './routes/notifications.js'
-import { mountOpenTypeBB } from '../../server/opentypebb.js'
-import { buildSDKCredentials } from '../../domain/market-data/credential-map.js'
+import { mountOpenTypeBB } from '../server/opentypebb.js'
+import { buildSDKCredentials } from '../domain/market-data/credential-map.js'
 
 export interface WebConfig {
   port: number
 }
 
 export class WebPlugin implements Plugin {
-  name = 'web'
+  name = 'webui'
   private server: ReturnType<typeof serve> | null = null
   /** SSE clients grouped by channel ID. Default channel: 'default'. */
   private sseByChannel = new Map<string, Map<string, SSEClient>>()
