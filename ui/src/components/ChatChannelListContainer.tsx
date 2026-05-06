@@ -26,9 +26,14 @@ export function ChatChannelListContainer() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="py-0.5 border-b border-border/40">
+      <div className="py-0.5">
         <SidebarRow
-          label="Notifications"
+          label={
+            <span className="flex items-center gap-2">
+              <BellIcon />
+              <span>Notifications</span>
+            </span>
+          }
           active={inboxActive}
           onClick={() => openOrFocus({ kind: 'notifications-inbox', params: {} })}
           trail={
@@ -44,7 +49,7 @@ export function ChatChannelListContainer() {
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="flex-1 overflow-y-auto min-h-0 mt-1">
         <ChatChannelList
           channels={channels}
           activeChannel={focusedChannelId}
@@ -54,5 +59,24 @@ export function ChatChannelListContainer() {
         />
       </div>
     </div>
+  )
+}
+
+function BellIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+    >
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
   )
 }
