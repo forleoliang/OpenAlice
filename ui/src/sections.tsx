@@ -22,6 +22,7 @@ import { PortfolioSidebar } from './components/PortfolioSidebar'
 import { AutomationSidebar } from './components/AutomationSidebar'
 import { NewsSidebar } from './components/NewsSidebar'
 import { DiarySidebar } from './components/DiarySidebar'
+import { NotificationsSidebar } from './components/NotificationsSidebar'
 import type { ActivitySection } from './tabs/types'
 
 export interface SidebarSection {
@@ -70,6 +71,10 @@ const SECTION_BY_KEY: Record<ActivitySection, SidebarSection> = {
   diary: {
     title: 'Diary',
     Secondary: DiarySidebar,
+  },
+  notifications: {
+    title: 'Notifications',
+    Secondary: NotificationsSidebar,
   },
 }
 

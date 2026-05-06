@@ -47,6 +47,7 @@ export type ActivitySection =
   | 'automation'
   | 'news'
   | 'diary'
+  | 'notifications'
 
 export interface Tab {
   id: string
