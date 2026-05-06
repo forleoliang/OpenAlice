@@ -76,11 +76,21 @@ const portfolioModule: ViewModule<'portfolio'> = {
   Component: () => <PortfolioPage />,
 }
 
+const automationSectionTitle: Record<
+  Extract<ViewSpec, { kind: 'automation' }>['params']['section'],
+  string
+> = {
+  flow: 'Flow',
+  heartbeat: 'Heartbeat',
+  cron: 'Cron Jobs',
+  webhook: 'Webhook',
+}
+
 const automationModule: ViewModule<'automation'> = {
   kind: 'automation',
-  title: () => 'Automation',
-  toUrl: () => '/automation',
-  Component: () => <AutomationPage />,
+  title: (spec) => automationSectionTitle[spec.params.section],
+  toUrl: (spec) => `/automation/${spec.params.section}`,
+  Component: AutomationPage,
 }
 
 const newsModule: ViewModule<'news'> = {

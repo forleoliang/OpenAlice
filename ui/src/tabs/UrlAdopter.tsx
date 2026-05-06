@@ -34,7 +34,8 @@ export function UrlAdopter() {
         <Route path="/chat/:channelId" element={<AdoptChat />} />
         <Route path="/diary" element={<AdoptStatic spec={{ kind: 'diary', params: {} }} />} />
         <Route path="/portfolio" element={<AdoptStatic spec={{ kind: 'portfolio', params: {} }} />} />
-        <Route path="/automation" element={<AdoptStatic spec={{ kind: 'automation', params: {} }} />} />
+        <Route path="/automation" element={<Navigate to="/automation/flow" replace />} />
+        <Route path="/automation/:section" element={<AdoptAutomation />} />
         <Route path="/news" element={<AdoptStatic spec={{ kind: 'news', params: {} }} />} />
         <Route path="/market" element={<AdoptStatic spec={{ kind: 'market-list', params: {} }} />} />
         <Route path="/market/:assetClass/:symbol" element={<AdoptMarketDetail />} />
@@ -58,8 +59,8 @@ export function UrlAdopter() {
         <Route path="/logs" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/events" element={<Navigate to="/dev/logs" replace />} />
         <Route path="/agent-status" element={<Navigate to="/dev/logs" replace />} />
-        <Route path="/heartbeat" element={<Navigate to="/automation" replace />} />
-        <Route path="/scheduler" element={<Navigate to="/automation" replace />} />
+        <Route path="/heartbeat" element={<Navigate to="/automation/heartbeat" replace />} />
+        <Route path="/scheduler" element={<Navigate to="/automation/cron" replace />} />
         <Route path="/ai-provider" element={<Navigate to="/settings/ai-provider" replace />} />
         <Route path="/trading" element={<Navigate to="/settings/trading" replace />} />
         <Route path="/connectors" element={<Navigate to="/settings/connectors" replace />} />
@@ -127,6 +128,20 @@ function AdoptDev() {
       spec={{
         kind: 'dev',
         params: { tab: tab as Extract<ViewSpec, { kind: 'dev' }>['params']['tab'] },
+      }}
+    />
+  )
+}
+
+function AdoptAutomation() {
+  const { section } = useParams<{ section: string }>()
+  const valid: ReadonlyArray<string> = ['flow', 'heartbeat', 'cron', 'webhook']
+  if (!section || !valid.includes(section)) return <Navigate to="/automation/flow" replace />
+  return (
+    <AdoptStatic
+      spec={{
+        kind: 'automation',
+        params: { section: section as Extract<ViewSpec, { kind: 'automation' }>['params']['section'] },
       }}
     />
   )

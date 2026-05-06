@@ -17,7 +17,7 @@ export type ViewSpec =
   | { kind: 'chat';           params: { channelId: string } }
   | { kind: 'diary';          params: Record<string, never> }
   | { kind: 'portfolio';      params: Record<string, never> }
-  | { kind: 'automation';     params: Record<string, never> }
+  | { kind: 'automation';     params: { section: 'flow' | 'heartbeat' | 'cron' | 'webhook' } }
   | { kind: 'news';           params: Record<string, never> }
   | { kind: 'market-list';    params: Record<string, never> }
   | { kind: 'market-detail';  params: { assetClass: 'equity' | 'crypto' | 'currency' | 'commodity'; symbol: string } }
