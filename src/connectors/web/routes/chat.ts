@@ -98,7 +98,13 @@ export function createChatRoutes({ ctx, sessions, sseByChannel }: ChatDeps) {
     const before = c.req.query('before')
     const session = sessions.get(channelId)
     if (!session) return c.json({ error: 'channel not found' }, 404)
-    const entries = await session.readActive()
+    const raw = await session.readActive()
+
+    // Backward-compat: pre-refactor heartbeats/cron writes used to land in
+    // web/default.jsonl tagged with metadata.kind === 'notification'. They
+    // now live in notifications.jsonl, but old entries still pollute chat
+    // history. Filter them out so the chat surface stays conversation-only.
+    const entries = raw.filter((e) => e.metadata?.kind !== 'notification')
 
     // Slice off anything at/after the cursor entry (older-than-cursor only).
     let sliced = entries

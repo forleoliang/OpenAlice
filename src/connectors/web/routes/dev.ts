@@ -28,34 +28,20 @@ export function createDevRoutes(connectorCenter: ConnectorCenter) {
     return c.json({ connectors, lastInteraction: connectorCenter.getLastInteraction() })
   })
 
-  /** Manually send a test message through a connector. */
+  /** Manually append a notification (exercises the same path as heartbeat / cron). */
   app.post('/send', async (c) => {
     const body = await c.req.json<{
-      channel?: string
-      kind?: 'message' | 'notification'
       text: string
       media?: Array<{ type: 'image'; path: string }>
-      source?: string
+      source?: 'heartbeat' | 'cron' | 'manual' | 'task'
     }>()
 
-    const opts = {
-      kind: body.kind ?? 'notification' as const,
-      media: body.media,
-      source: (body.source as 'heartbeat' | 'cron' | 'manual') ?? 'manual',
-    }
-
     try {
-      if (body.channel) {
-        // Send to a specific channel
-        const target = connectorCenter.get(body.channel)
-        if (!target) return c.json({ error: `No connector for channel: ${body.channel}` }, 404)
-        const result = await target.send({ text: body.text, ...opts })
-        return c.json({ channel: target.channel, to: target.to, ...result })
-      }
-
-      // Default: notify via last-interacted connector
-      const result = await connectorCenter.notify(body.text, opts)
-      return c.json(result)
+      const entry = await connectorCenter.notify(body.text, {
+        media: body.media,
+        source: body.source ?? 'manual',
+      })
+      return c.json({ entry })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }

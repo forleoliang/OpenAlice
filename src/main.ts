@@ -30,6 +30,7 @@ import { createAnalysisTools } from './tool/analysis.js'
 import { createSessionTools } from './tool/session.js'
 import { SessionStore } from './core/session.js'
 import { ConnectorCenter } from './core/connector-center.js'
+import { createNotificationsStore } from './core/notifications-store.js'
 import { ToolCenter } from './core/tool-center.js'
 import { AgentCenter } from './core/agent-center.js'
 import { GenerateRouter } from './core/ai-provider-manager.js'
@@ -260,9 +261,10 @@ async function main() {
     toolCallLog,
   })
 
-  // ==================== Connector Center ====================
+  // ==================== Notifications store + Connector Center ====================
 
-  const connectorCenter = new ConnectorCenter({ eventLog, listenerRegistry })
+  const notificationsStore = createNotificationsStore()
+  const connectorCenter = new ConnectorCenter({ eventLog, listenerRegistry, notificationsStore })
 
   // Session awareness tools (registered here because they need connectorCenter)
   toolCenter.register(createSessionTools(connectorCenter), 'session')
@@ -410,7 +412,7 @@ async function main() {
   // ==================== Engine Context ====================
 
   const ctx: EngineContext = {
-    config, connectorCenter, agentCenter, eventLog, toolCallLog, heartbeat, cronEngine, toolCenter,
+    config, connectorCenter, notificationsStore, agentCenter, eventLog, toolCallLog, heartbeat, cronEngine, toolCenter,
     listenerRegistry,
     fire: createEventBus(eventLog),
     bbEngine: getSDKExecutor(),

@@ -25,6 +25,7 @@ import { createAgentStatusRoutes } from './routes/agent-status.js'
 import { createPersonaRoutes } from './routes/persona.js'
 import { createNewsRoutes } from './routes/news.js'
 import { createMarketRoutes } from './routes/market.js'
+import { createNotificationsRoutes, type SSEClient as NotificationsSSEClient } from './routes/notifications.js'
 import { mountOpenTypeBB } from '../../server/opentypebb.js'
 import { buildSDKCredentials } from '../../domain/market-data/credential-map.js'
 
@@ -37,7 +38,10 @@ export class WebPlugin implements Plugin {
   private server: ReturnType<typeof serve> | null = null
   /** SSE clients grouped by channel ID. Default channel: 'default'. */
   private sseByChannel = new Map<string, Map<string, SSEClient>>()
+  /** Clients connected to the notifications SSE stream. */
+  private notificationsSSE = new Map<string, NotificationsSSEClient>()
   private unregisterConnector?: () => void
+  private unsubscribeNotifications?: () => void
   private ingestProducer?: ProducerHandle<readonly ['task.requested']>
 
   constructor(private config: WebConfig) {}
@@ -112,6 +116,10 @@ export class WebPlugin implements Plugin {
     app.route('/api/news', createNewsRoutes(ctx))
     app.route('/api/market', createMarketRoutes(ctx))
     app.route('/api/persona', createPersonaRoutes())
+    app.route('/api/notifications', createNotificationsRoutes({
+      notificationsStore: ctx.notificationsStore,
+      notificationsSSE: this.notificationsSSE,
+    }))
 
     // ==================== Mount opentypebb (market data HTTP) ====================
     // opentypebb is Alice's first-class market-data package; its router is
@@ -131,10 +139,19 @@ export class WebPlugin implements Plugin {
     app.get('*', serveStatic({ root: uiRoot, path: 'index.html' }))
 
     // ==================== Connector registration ====================
-    // The web connector only targets the main 'default' channel (heartbeat/cron notifications).
-    this.unregisterConnector = ctx.connectorCenter.register(
-      new WebConnector(this.sseByChannel, defaultSession),
-    )
+    // WebConnector now exists primarily so `lastInteraction` tracking
+    // identifies "web" as the active surface. Notifications no longer
+    // flow through it — they go through notificationsStore.onAppended,
+    // and the subscription below pushes new entries to clients connected
+    // on /api/notifications/stream.
+    this.unregisterConnector = ctx.connectorCenter.register(new WebConnector())
+
+    this.unsubscribeNotifications = ctx.notificationsStore.onAppended((entry) => {
+      const data = JSON.stringify(entry)
+      for (const client of this.notificationsSSE.values()) {
+        try { client.send(data) } catch { /* disconnected — onAbort cleans up */ }
+      }
+    })
 
     // ==================== Start server ====================
     this.server = serve({ fetch: app.fetch, port: this.config.port }, (info: { port: number }) => {
@@ -144,6 +161,9 @@ export class WebPlugin implements Plugin {
 
   async stop() {
     this.sseByChannel.clear()
+    this.notificationsSSE.clear()
+    this.unsubscribeNotifications?.()
+    this.unsubscribeNotifications = undefined
     this.unregisterConnector?.()
     this.ingestProducer?.dispose()
     this.ingestProducer = undefined

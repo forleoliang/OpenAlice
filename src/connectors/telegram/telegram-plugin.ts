@@ -32,6 +32,7 @@ export class TelegramPlugin implements Plugin {
   private connectorCenter: ConnectorCenter | null = null
   private merger: MediaGroupMerger | null = null
   private unregisterConnector?: () => void
+  private unsubscribeNotifications?: () => void
 
   /** Per-user unified session stores (keyed by userId). */
   private sessions = new Map<number, SessionStore>()
@@ -111,6 +112,20 @@ export class TelegramPlugin implements Plugin {
 
     bot.command('trading', async (ctx) => {
       await this.handleTradingCommand(ctx.chat.id, engineCtx.utaManager)
+    })
+
+    bot.command('notifications', async (ctx) => {
+      const { entries } = await engineCtx.notificationsStore.read({ limit: 10 })
+      if (entries.length === 0) {
+        await this.sendReply(ctx.chat.id, 'No notifications yet.')
+        return
+      }
+      const formatted = entries.map((e) => {
+        const when = new Date(e.ts).toLocaleString()
+        const tag = e.source ? `[${e.source}]` : ''
+        return `${when} ${tag}\n${e.text}`
+      }).join('\n\n— — —\n\n')
+      await this.sendReply(ctx.chat.id, `Recent notifications (${entries.length}):\n\n${formatted}`)
     })
 
     // ── Callback queries (inline keyboard presses) ──
@@ -217,6 +232,7 @@ export class TelegramPlugin implements Plugin {
       { command: 'heartbeat', description: 'Toggle heartbeat self-check' },
       { command: 'compact', description: 'Force compact session context' },
       { command: 'trading', description: 'Trading status and pending commits' },
+      { command: 'notifications', description: 'Show recent system notifications' },
     ])
 
     // ── Initialize and get bot info ──
@@ -227,7 +243,20 @@ export class TelegramPlugin implements Plugin {
     // ── Register connector for outbound delivery (heartbeat / cron responses) ──
     if (this.config.allowedChatIds.length > 0) {
       const deliveryChatId = this.config.allowedChatIds[0]
-      this.unregisterConnector = this.connectorCenter!.register(new TelegramConnector(bot, deliveryChatId))
+      const telegramConnector = new TelegramConnector(bot, deliveryChatId)
+      this.unregisterConnector = this.connectorCenter!.register(telegramConnector)
+
+      // Subscribe to notifications store. Telegram surfaces system pushes
+      // by inlining them into the chat thread — but only when the user
+      // is actively using Telegram (last-interacted channel is 'telegram').
+      // Otherwise we don't ping; the user can pull via /notifications.
+      this.unsubscribeNotifications = engineCtx.notificationsStore.onAppended((entry) => {
+        const last = engineCtx.connectorCenter.getLastInteraction()
+        if (last?.channel !== 'telegram') return
+        telegramConnector
+          .send({ kind: 'notification', text: entry.text, media: entry.media, source: entry.source })
+          .catch((err) => console.warn('telegram: notification surface failed:', err))
+      })
     }
 
     // ── Start polling ──
@@ -243,6 +272,8 @@ export class TelegramPlugin implements Plugin {
   async stop() {
     this.merger?.flush()
     await this.bot?.stop()
+    this.unsubscribeNotifications?.()
+    this.unsubscribeNotifications = undefined
     this.unregisterConnector?.()
   }
 
