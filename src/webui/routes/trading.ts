@@ -6,6 +6,7 @@ import { BrokerError } from '../../domain/trading/brokers/types.js'
 import type { UnifiedTradingAccount } from '../../domain/trading/UnifiedTradingAccount.js'
 import { searchTradeableContracts } from '../../domain/trading/contract-search.js'
 import type { AssetClassHint } from '../../domain/trading/contract-search-rules.js'
+import { executeOneShotOrder, type OrderEntryPhase } from '../../domain/trading/order-entry.js'
 
 // ==================== Order entry schemas ====================
 //
@@ -53,44 +54,23 @@ const cancelOrderSchema = z.object({
   message,
 })
 
-/**
- * Combine stage → commit → push into one HTTP roundtrip. The
- * underlying TradingGit phases stay separate; this is a route-layer
- * convenience for the frontend's manual order entry surface. Returns
- * the full PushResult (including per-op submitted/rejected breakdown
- * with fills + errors) so the user can see async behavior end-to-end.
- *
- * On error, the response carries `phase` so the frontend can label
- * which step failed (stage → guards bounced; commit → invalid state;
- * push → broker exception before any per-op result).
- */
-async function executeOneShot<T>(
+/** HTTP status mapping for one-shot order pipeline failures. */
+const PHASE_STATUS: Record<OrderEntryPhase, 400 | 500> = {
+  stage: 400,
+  commit: 400,
+  push: 500,
+}
+
+/** Run the domain pipeline and translate to a Hono Response. */
+async function runOneShot(
   c: Context,
   uta: UnifiedTradingAccount,
   message: string,
-  stage: () => T,
+  stage: () => void,
 ): Promise<Response> {
-  // Stage
-  try {
-    stage()
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err), phase: 'stage' }, 400)
-  }
-  // Commit
-  try {
-    uta.commit(message)
-  } catch (err) {
-    // Roll back the staging area so the next attempt starts clean.
-    try { await uta.reject('auto-rollback after commit error') } catch { /* best effort */ }
-    return c.json({ error: err instanceof Error ? err.message : String(err), phase: 'commit' }, 400)
-  }
-  // Push
-  try {
-    const result = await uta.push()
-    return c.json(result)
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err), phase: 'push' }, 500)
-  }
+  const r = await executeOneShotOrder(uta, message, stage)
+  if (r.ok) return c.json(r.result)
+  return c.json({ error: r.error, phase: r.phase }, PHASE_STATUS[r.phase])
 }
 
 const ALLOWED_ASSET_CLASSES: ReadonlySet<AssetClassHint> = new Set([
@@ -319,7 +299,7 @@ export function createTradingRoutes(ctx: EngineContext) {
     } catch (err) {
       return c.json({ error: err instanceof z.ZodError ? err.message : String(err), phase: 'validate' }, 400)
     }
-    return executeOneShot(c, uta, body.message, () => {
+    return runOneShot(c, uta, body.message, () => {
       const { message: _msg, ...stageParams } = body
       uta.stagePlaceOrder(stageParams)
     })
@@ -334,7 +314,7 @@ export function createTradingRoutes(ctx: EngineContext) {
     } catch (err) {
       return c.json({ error: err instanceof z.ZodError ? err.message : String(err), phase: 'validate' }, 400)
     }
-    return executeOneShot(c, uta, body.message, () => {
+    return runOneShot(c, uta, body.message, () => {
       const { message: _msg, ...stageParams } = body
       // qty stays a string all the way to Decimal — no float roundtrip.
       uta.stageClosePosition(stageParams)
@@ -350,7 +330,7 @@ export function createTradingRoutes(ctx: EngineContext) {
     } catch (err) {
       return c.json({ error: err instanceof z.ZodError ? err.message : String(err), phase: 'validate' }, 400)
     }
-    return executeOneShot(c, uta, body.message, () => {
+    return runOneShot(c, uta, body.message, () => {
       uta.stageCancelOrder({ orderId: body.orderId })
     })
   })
