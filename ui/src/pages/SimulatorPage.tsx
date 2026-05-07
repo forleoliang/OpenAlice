@@ -2,7 +2,8 @@
  * Simulator dev tab — manual control panel for MockBroker UTAs.
  *
  * Lets you drive scenarios that real exchanges produce on their own:
- *  - Move markPrice (auto-fills any触达 limit/stop orders)
+ *  - Move markPrice (auto-fills any limit/stop orders that the new price
+ *    crosses)
  *  - Manually fill or cancel a pending order
  *  - Inject "external" events (deposit, withdraw, off-platform trade) so
  *    the UTA reconcile pipeline kicks in just like it would on a real
@@ -90,7 +91,38 @@ export function SimulatorPage() {
   }, [selected, toast, refresh])
 
   return (
-    <div className="px-4 md:px-6 py-5 max-w-[960px] space-y-5">
+    <div className="px-4 md:px-6 py-5 max-w-[1200px] space-y-5">
+      {/* Top bar: account picker + cash + create button */}
+      <div className="flex items-center gap-3 flex-wrap">
+        {utas.length === 0 ? (
+          <span className="text-sm text-text-muted">No simulator account yet.</span>
+        ) : (
+          <>
+            <label className="text-[12px] text-text-muted uppercase tracking-wide">Account</label>
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              className="px-2.5 py-1 bg-bg text-text border border-border rounded text-sm outline-none focus:border-accent min-w-[260px]"
+            >
+              {utas.map(u => <option key={u.id} value={u.id}>{u.label} ({u.id})</option>)}
+            </select>
+            <button
+              onClick={refresh}
+              className="px-2.5 py-1 text-xs bg-bg-tertiary text-text-muted rounded hover:text-text transition-colors"
+            >
+              Refresh
+            </button>
+            {state && (
+              <span className="ml-auto text-[12px] text-text-muted uppercase tracking-wide">
+                Cash <span className="font-mono text-text text-sm normal-case ml-1.5">
+                  ${Number(state.cash).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </span>
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
       <CreateSimulatorSection
         onCreated={async (newId) => {
           const list = await refreshUtaList()
@@ -98,39 +130,18 @@ export function SimulatorPage() {
         }}
       />
 
-      {utas.length === 0 ? (
-        <p className="text-sm text-text-muted">No simulator account yet — create one above.</p>
-      ) : (
-        <div className="flex items-center gap-3">
-          <label className="text-[13px] text-text-muted">Account</label>
-          <select
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className="px-2.5 py-1 bg-bg text-text border border-border rounded text-sm outline-none focus:border-accent"
-          >
-            {utas.map(u => <option key={u.id} value={u.id}>{u.label} ({u.id})</option>)}
-          </select>
-          <button
-            onClick={refresh}
-            className="px-2.5 py-1 text-xs bg-bg-tertiary text-text-muted rounded hover:text-text transition-colors"
-          >
-            Refresh
-          </button>
-        </div>
-      )}
-
       {selected && (state ? (
         <>
-          <Section title="Cash" description="Available USD balance.">
-            <p className="font-mono text-lg text-text">${Number(state.cash).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-          </Section>
-
-          <MarkPricesSection
-            utaId={selected}
-            state={state}
-            run={run}
-            loading={loading}
-          />
+          {/* Two-column row: prices on left (drives the simulation), positions on right (where you watch the result). Action and observation paired side by side. */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+            <MarkPricesSection
+              utaId={selected}
+              state={state}
+              run={run}
+              loading={loading}
+            />
+            <PositionsSection state={state} />
+          </div>
 
           <PendingOrdersSection
             utaId={selected}
@@ -138,8 +149,6 @@ export function SimulatorPage() {
             run={run}
             loading={loading}
           />
-
-          <PositionsSection state={state} />
 
           <ExternalEventsSection
             utaId={selected}
@@ -279,7 +288,7 @@ function MarkPricesSection({ utaId, state, run, loading }: {
   return (
     <Section
       title="Mark Prices"
-      description="Per-symbol mark price. Editing or ticking auto-matches any触达 pending limit/stop orders."
+      description="Per-symbol mark price. Editing or ticking auto-matches any pending limit/stop order whose trigger the new price crosses."
     >
       <div className="space-y-1">
         {state.markPrices.length === 0 ? (
@@ -394,7 +403,7 @@ function PendingOrdersSection({ utaId, state, run, loading }: {
   return (
     <Section
       title="Pending Orders"
-      description="Submitted limit/stop orders waiting for触达 or manual fill."
+      description="Submitted limit/stop orders waiting on a price trigger or manual fill."
     >
       {state.pendingOrders.length === 0 ? (
         <p className="text-xs text-text-muted">No pending orders.</p>
@@ -472,6 +481,13 @@ function PendingOrdersSection({ utaId, state, run, loading }: {
 // ==================== Positions ====================
 
 function PositionsSection({ state }: { state: SimulatorState }) {
+  // Pre-index markPrices so the PnL column reads in O(1) per row.
+  const markByKey = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const mp of state.markPrices) m.set(mp.nativeKey, mp.price)
+    return m
+  }, [state.markPrices])
+
   return (
     <Section
       title="Positions"
@@ -483,27 +499,47 @@ function PositionsSection({ state }: { state: SimulatorState }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-text-muted text-xs">
-              <th className="pb-1 pr-3">Native Key</th>
-              <th className="pb-1 pr-3">Symbol</th>
-              <th className="pb-1 pr-3">SecType</th>
-              <th className="pb-1 pr-3">Side</th>
+              <th className="pb-1 pr-3">Position</th>
               <th className="pb-1 pr-3 text-right">Qty</th>
               <th className="pb-1 pr-3 text-right">Avg Cost</th>
-              <th className="pb-1 text-right">Source</th>
+              <th className="pb-1 pr-3 text-right">Mark</th>
+              <th className="pb-1 text-right">PnL</th>
             </tr>
           </thead>
           <tbody>
-            {state.positions.map((p) => (
-              <tr key={p.nativeKey} className="text-text">
-                <td className="py-1 pr-3 font-mono text-xs">{p.nativeKey}</td>
-                <td className="py-1 pr-3">{p.symbol}</td>
-                <td className="py-1 pr-3 text-text-muted text-xs">{p.secType ?? '—'}</td>
-                <td className="py-1 pr-3">{p.side}</td>
-                <td className="py-1 pr-3 font-mono text-xs text-right">{p.quantity}</td>
-                <td className="py-1 pr-3 font-mono text-xs text-right">{p.avgCost}</td>
-                <td className="py-1 text-right text-text-muted text-xs">{p.avgCostSource ?? 'broker'}</td>
-              </tr>
-            ))}
+            {state.positions.map((p) => {
+              const mark = markByKey.get(p.nativeKey)
+              const qty = Number(p.quantity)
+              const avg = Number(p.avgCost)
+              const pnl = mark && Number.isFinite(qty) && Number.isFinite(avg)
+                ? (Number(mark) - avg) * qty * (p.side === 'long' ? 1 : -1)
+                : null
+              const pnlClass = pnl == null ? 'text-text-muted' : pnl > 0 ? 'text-green' : pnl < 0 ? 'text-red' : 'text-text'
+              return (
+                <tr key={p.nativeKey} className="text-text">
+                  <td className="py-1 pr-3">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-xs">{p.nativeKey}</span>
+                      {p.secType && (
+                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-bg-tertiary text-text-muted/80">{p.secType}</span>
+                      )}
+                      <span className={`text-[10px] px-1 py-0.5 rounded font-medium ${p.side === 'long' ? 'bg-green/15 text-green' : 'bg-red/15 text-red'}`}>
+                        {p.side}
+                      </span>
+                      {p.avgCostSource === 'wallet' && (
+                        <span className="text-[9px] text-text-muted/60" title="Cost basis derived from UTA reconcile pipeline (wallet-source position)">wallet</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-1 pr-3 font-mono text-xs text-right">{p.quantity}</td>
+                  <td className="py-1 pr-3 font-mono text-xs text-right">{p.avgCost}</td>
+                  <td className="py-1 pr-3 font-mono text-xs text-right text-text-muted">{mark ?? '—'}</td>
+                  <td className={`py-1 font-mono text-xs text-right ${pnlClass}`}>
+                    {pnl == null ? '—' : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       )}
@@ -564,7 +600,7 @@ function ExternalEventsSection({ utaId, state, run, loading }: {
   return (
     <Section
       title="External Events"
-      description="Simulate balance changes Alice didn't initiate (空投, transfer, off-platform trade) — exercises the UTA reconcile pipeline."
+      description="Simulate balance changes Alice didn't initiate (airdrop, transfer-in, off-platform trade) — exercises the UTA reconcile pipeline."
     >
       <div className="flex items-center gap-2 mb-3">
         {(['deposit', 'withdraw', 'trade'] as const).map((m) => (
