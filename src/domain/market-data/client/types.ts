@@ -26,7 +26,7 @@ import type {
   FuturesHistoricalData, FuturesCurveData, FuturesInfoData, FuturesInstrumentsData,
   OptionsChainsData, OptionsSnapshotsData, OptionsUnusualData,
   // Commodity
-  CommoditySpotPriceData,
+  CommoditySpotPriceData, PetroleumStatusReportData, ShortTermEnergyOutlookData,
   // Economy (FRED)
   FredSearchData, FredSeriesData, FredRegionalData,
 } from '@traderalice/opentypebb'
@@ -82,6 +82,12 @@ export interface IndexClientLike {
 
 export interface CommodityClientLike {
   getSpotPrices(params: Record<string, unknown>): Promise<CommoditySpotPriceData[]>
+  // EIA endpoints — semantically macro/economy data, but OpenBB upstream
+  // routes them under /commodity/* (output is oil/gas prices + inventories).
+  // The SDK clients carry them; the tool layer surfaces them under
+  // tool/economy.ts so AI agents see one coherent macro namespace.
+  getPetroleumStatus(params: Record<string, unknown>): Promise<PetroleumStatusReportData[]>
+  getEnergyOutlook(params: Record<string, unknown>): Promise<ShortTermEnergyOutlookData[]>
 }
 
 export interface EconomyClientLike {

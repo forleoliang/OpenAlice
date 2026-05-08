@@ -193,7 +193,7 @@ async function main() {
     equityClient = new OpenBBEquityClient(url, providers.equity, keys)
     cryptoClient = new OpenBBCryptoClient(url, providers.crypto, keys)
     currencyClient = new OpenBBCurrencyClient(url, providers.currency, keys)
-    commodityClient = new OpenBBCommodityClient(url, providers.commodity, keys)
+    commodityClient = new OpenBBCommodityClient(url, providers.commodity, keys) as unknown as CommodityClientLike
     economyClient = new OpenBBEconomyClient(url, 'federal_reserve', keys) as unknown as EconomyClientLike
   } else {
     const executor = getSDKExecutor()
@@ -243,7 +243,7 @@ async function main() {
     toolCenter.register(createNewsArchiveTools(newsStore), 'news')
   }
   toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient, commodityClient), 'analysis')
-  toolCenter.register(createEconomyTools(economyClient), 'economy')
+  toolCenter.register(createEconomyTools(economyClient, commodityClient), 'economy')
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered`)
 

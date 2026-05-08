@@ -10,14 +10,22 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import type { EconomyClientLike } from '@/domain/market-data/client/types'
+import type { EconomyClientLike, CommodityClientLike } from '@/domain/market-data/client/types'
 import { createEconomyTools } from './economy.js'
 
-function makeMockClient(): EconomyClientLike {
+function makeMockEconomyClient(): EconomyClientLike {
   return {
     fredSearch: vi.fn(async () => []),
     fredSeries: vi.fn(async () => []),
     fredRegional: vi.fn(async () => []),
+  }
+}
+
+function makeMockCommodityClient(): CommodityClientLike {
+  return {
+    getSpotPrices: vi.fn(async () => []),
+    getPetroleumStatus: vi.fn(async () => []),
+    getEnergyOutlook: vi.fn(async () => []),
   }
 }
 
@@ -26,11 +34,13 @@ const exec = (t: any, args: unknown) => (t.execute as Function)(args)
 
 describe('createEconomyTools — economyFredSearch', () => {
   let client: EconomyClientLike
+  let commodity: CommodityClientLike
   let tools: ReturnType<typeof createEconomyTools>
 
   beforeEach(() => {
-    client = makeMockClient()
-    tools = createEconomyTools(client)
+    client = makeMockEconomyClient()
+    commodity = makeMockCommodityClient()
+    tools = createEconomyTools(client, commodity)
   })
 
   it('passes query through and pins provider to federal_reserve', async () => {
@@ -76,11 +86,13 @@ describe('createEconomyTools — economyFredSearch', () => {
 
 describe('createEconomyTools — economyFredSeries', () => {
   let client: EconomyClientLike
+  let commodity: CommodityClientLike
   let tools: ReturnType<typeof createEconomyTools>
 
   beforeEach(() => {
-    client = makeMockClient()
-    tools = createEconomyTools(client)
+    client = makeMockEconomyClient()
+    commodity = makeMockCommodityClient()
+    tools = createEconomyTools(client, commodity)
   })
 
   it('passes single symbol + provider', async () => {
@@ -118,11 +130,13 @@ describe('createEconomyTools — economyFredSeries', () => {
 
 describe('createEconomyTools — economyFredRegional', () => {
   let client: EconomyClientLike
+  let commodity: CommodityClientLike
   let tools: ReturnType<typeof createEconomyTools>
 
   beforeEach(() => {
-    client = makeMockClient()
-    tools = createEconomyTools(client)
+    client = makeMockEconomyClient()
+    commodity = makeMockCommodityClient()
+    tools = createEconomyTools(client, commodity)
   })
 
   it('passes symbol + provider with no extras', async () => {
@@ -146,18 +160,96 @@ describe('createEconomyTools — economyFredRegional', () => {
   })
 })
 
+describe('createEconomyTools — economyEnergyOutlook', () => {
+  let economy: EconomyClientLike
+  let commodity: CommodityClientLike
+  let tools: ReturnType<typeof createEconomyTools>
+
+  beforeEach(() => {
+    economy = makeMockEconomyClient()
+    commodity = makeMockCommodityClient()
+    tools = createEconomyTools(economy, commodity)
+  })
+
+  it('passes category through and pins provider to eia', async () => {
+    await exec(tools.economyEnergyOutlook, { category: 'crude_oil_price' })
+    expect(commodity.getEnergyOutlook).toHaveBeenCalledWith({ category: 'crude_oil_price', provider: 'eia' })
+  })
+
+  it('forwards date range when provided', async () => {
+    await exec(tools.economyEnergyOutlook, {
+      category: 'natural_gas_price', start_date: '2024-01-01', end_date: '2024-12-31',
+    })
+    expect(commodity.getEnergyOutlook).toHaveBeenCalledWith({
+      category: 'natural_gas_price', provider: 'eia',
+      start_date: '2024-01-01', end_date: '2024-12-31',
+    })
+  })
+
+  it('schema rejects unknown category (zod enum)', () => {
+    const schema = (tools.economyEnergyOutlook as any).inputSchema
+    expect(schema.safeParse({ category: 'bitcoin_price' }).success).toBe(false)
+  })
+
+  it('schema rejects missing category', () => {
+    const schema = (tools.economyEnergyOutlook as any).inputSchema
+    expect(schema.safeParse({}).success).toBe(false)
+  })
+
+  it('does NOT touch economyClient', async () => {
+    await exec(tools.economyEnergyOutlook, { category: 'crude_oil_price' })
+    expect(economy.fredSearch).not.toHaveBeenCalled()
+    expect(economy.fredSeries).not.toHaveBeenCalled()
+    expect(economy.fredRegional).not.toHaveBeenCalled()
+  })
+
+  it('propagates client errors instead of swallowing', async () => {
+    ;(commodity.getEnergyOutlook as any).mockRejectedValueOnce(new Error('eia 403'))
+    await expect(exec(tools.economyEnergyOutlook, { category: 'crude_oil_price' })).rejects.toThrow('eia 403')
+  })
+})
+
+describe('createEconomyTools — economyPetroleumStatus', () => {
+  let economy: EconomyClientLike
+  let commodity: CommodityClientLike
+  let tools: ReturnType<typeof createEconomyTools>
+
+  beforeEach(() => {
+    economy = makeMockEconomyClient()
+    commodity = makeMockCommodityClient()
+    tools = createEconomyTools(economy, commodity)
+  })
+
+  it('passes category through and pins provider to eia', async () => {
+    await exec(tools.economyPetroleumStatus, { category: 'crude_oil_stocks' })
+    expect(commodity.getPetroleumStatus).toHaveBeenCalledWith({ category: 'crude_oil_stocks', provider: 'eia' })
+  })
+
+  it('schema rejects unknown category', () => {
+    const schema = (tools.economyPetroleumStatus as any).inputSchema
+    expect(schema.safeParse({ category: 'gold_inventory' }).success).toBe(false)
+  })
+
+  it('does NOT touch economyClient', async () => {
+    await exec(tools.economyPetroleumStatus, { category: 'crude_oil_stocks' })
+    expect(economy.fredSearch).not.toHaveBeenCalled()
+  })
+})
+
 describe('createEconomyTools — toolset surface', () => {
-  it('exposes exactly the three FRED tools', () => {
-    const tools = createEconomyTools(makeMockClient())
+  it('exposes the FRED + EIA tools', () => {
+    const tools = createEconomyTools(makeMockEconomyClient(), makeMockCommodityClient())
     expect(Object.keys(tools).sort()).toEqual([
+      'economyEnergyOutlook',
       'economyFredRegional',
       'economyFredSearch',
       'economyFredSeries',
+      'economyPetroleumStatus',
     ])
   })
 
   it('every tool has a description and inputSchema', () => {
-    const tools = createEconomyTools(makeMockClient()) as Record<string, any>
+    const tools = createEconomyTools(makeMockEconomyClient(), makeMockCommodityClient()) as Record<string, any>
     for (const [name, t] of Object.entries(tools)) {
       expect(t.description, `${name} description`).toBeTruthy()
       expect(t.inputSchema, `${name} inputSchema`).toBeDefined()
