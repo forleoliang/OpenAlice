@@ -95,6 +95,7 @@ export function TradingPage() {
   const [presets, setPresets] = useState<BrokerPreset[]>([])
   const [equity, setEquity] = useState<EquitySummary | null>(null)
   const [curve, setCurve] = useState<CurveSummary | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   useEffect(() => {
     api.trading.getBrokerPresets().then(r => setPresets(r.presets)).catch(() => {})
@@ -112,6 +113,7 @@ export function TradingPage() {
       ])
       if (eq) setEquity(eq)
       setCurve(summarizeCurve(cv.points))
+      setLastUpdated(new Date())
     } catch {
       // Don't surface — aggregates are nice-to-have, the page still renders
       // from useTradingConfig if the equity endpoint is down.
@@ -136,7 +138,11 @@ export function TradingPage() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <PageHeader title="Trading" description="Configure your UTAs (Unified Trading Accounts)." />
+      <PageHeader
+        title="Trading"
+        description="Configure your UTAs (Unified Trading Accounts)."
+        live={tc.utas.length > 0 ? { lastUpdated } : undefined}
+      />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
         <div className="max-w-[820px] mx-auto space-y-4">

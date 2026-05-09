@@ -39,7 +39,7 @@ export function ChatChannelListContainer() {
           trail={
             unreadCount > 0 ? (
               <span
-                className="min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-[10px] font-semibold text-white tabular-nums flex items-center justify-center"
+                className="min-w-[16px] h-[16px] px-1 rounded-full bg-red text-[10px] font-semibold text-white tabular-nums flex items-center justify-center"
                 aria-label={`${unreadCount} unread`}
               >
                 {unreadCount > 99 ? '99+' : unreadCount}

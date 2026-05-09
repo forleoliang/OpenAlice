@@ -1,4 +1,5 @@
 import { useState, type MouseEvent, type WheelEvent } from 'react'
+import { X } from 'lucide-react'
 import { useChannels } from '../contexts/ChannelsContext'
 import { useWorkspace } from '../tabs/store'
 import { getView } from '../tabs/registry'
@@ -165,9 +166,7 @@ function TabButton({ title, active, onSelect, onClose, onContextMenu }: TabButto
         className="w-4 h-4 rounded flex items-center justify-center text-text-muted/60 hover:text-text hover:bg-bg-tertiary"
         aria-label={`Close ${title}`}
       >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-          <path d="M18 6L6 18M6 6l12 12" />
-        </svg>
+        <X size={11} strokeWidth={2.5} />
       </button>
     </div>
   )

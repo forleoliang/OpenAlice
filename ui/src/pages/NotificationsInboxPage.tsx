@@ -7,7 +7,7 @@ import type { NotificationEntry, NotificationSource } from '../api/notifications
 const SOURCE_COLORS: Record<NotificationSource, string> = {
   heartbeat: 'bg-purple/15 text-purple',
   cron: 'bg-accent/15 text-accent',
-  task: 'bg-emerald-500/15 text-emerald-400',
+  task: 'bg-green/15 text-green',
   manual: 'bg-amber-500/15 text-amber-400',
 }
 

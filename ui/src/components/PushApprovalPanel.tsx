@@ -94,8 +94,8 @@ function timeAgo(iso: string): string {
 function statusColor(status: string): string {
   switch (status) {
     case 'submitted': return 'text-blue-400'
-    case 'filled': return 'text-green-400'
-    case 'rejected': return 'text-red-400'
+    case 'filled': return 'text-green'
+    case 'rejected': return 'text-red'
     case 'user-rejected': return 'text-orange-400'
     case 'cancelled': return 'text-text-muted'
     default: return 'text-text-muted'
@@ -226,7 +226,7 @@ export function PushApprovalPanel() {
                       <div
                         key={i}
                         className={`text-xs font-mono px-2 py-1 rounded bg-bg/50 ${
-                          side === 'buy' ? 'text-green-400' : side === 'sell' ? 'text-red-400' : 'text-text-muted'
+                          side === 'buy' ? 'text-green' : side === 'sell' ? 'text-red' : 'text-text-muted'
                         }`}
                       >
                         {text}
@@ -261,7 +261,7 @@ export function PushApprovalPanel() {
                       <div
                         key={i}
                         className={`text-xs font-mono px-2 py-1 rounded bg-bg/50 ${
-                          side === 'buy' ? 'text-green-400' : side === 'sell' ? 'text-red-400' : 'text-text-muted'
+                          side === 'buy' ? 'text-green' : side === 'sell' ? 'text-red' : 'text-text-muted'
                         }`}
                       >
                         {text}
@@ -300,7 +300,7 @@ export function PushApprovalPanel() {
                     <button
                       onClick={() => handleReject(account.id)}
                       disabled={pushing !== null || rejecting !== null}
-                      className="text-xs px-3 py-1.5 rounded font-medium border border-border text-text-muted hover:text-red-400 hover:border-red-400/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      className="text-xs px-3 py-1.5 rounded font-medium border border-border text-text-muted hover:text-red hover:border-red/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                       {rejecting === account.id ? '...' : 'Reject'}
                     </button>
@@ -315,17 +315,17 @@ export function PushApprovalPanel() {
                 <div className="text-[11px] font-medium text-text-muted uppercase tracking-wider">Last push</div>
                 <div className="text-xs text-text">
                   {lastResult.data.submitted.length > 0 && (
-                    <span className="text-green-400">{lastResult.data.submitted.length} submitted</span>
+                    <span className="text-green">{lastResult.data.submitted.length} submitted</span>
                   )}
                   {lastResult.data.rejected.length > 0 && (
                     <>
                       {lastResult.data.submitted.length > 0 && ', '}
-                      <span className="text-red-400">{lastResult.data.rejected.length} rejected</span>
+                      <span className="text-red">{lastResult.data.rejected.length} rejected</span>
                     </>
                   )}
                 </div>
                 {lastResult.data.rejected.map((r, i) => (
-                  <div key={i} className="text-xs text-red-400/80 px-2">{r.error || 'Unknown error'}</div>
+                  <div key={i} className="text-xs text-red/80 px-2">{r.error || 'Unknown error'}</div>
                 ))}
                 <button onClick={() => setLastResult(null)} className="text-[11px] text-text-muted hover:text-text">
                   Dismiss
@@ -334,7 +334,7 @@ export function PushApprovalPanel() {
             )}
 
             {error && (
-              <div className="text-xs text-red-400 pt-2 border-t border-border">
+              <div className="text-xs text-red pt-2 border-t border-border">
                 {error}
                 <button onClick={() => setError(null)} className="ml-2 text-text-muted hover:text-text">Dismiss</button>
               </div>

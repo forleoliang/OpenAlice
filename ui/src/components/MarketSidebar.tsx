@@ -8,7 +8,7 @@ import { SidebarRow } from './SidebarRow'
 const ASSET_CLASS_COLORS: Record<AssetClass, string> = {
   equity: 'bg-accent/15 text-accent',
   crypto: 'bg-amber-500/15 text-amber-400',
-  currency: 'bg-emerald-500/15 text-emerald-400',
+  currency: 'bg-green/15 text-green',
   commodity: 'bg-purple-500/15 text-purple-400',
 }
 

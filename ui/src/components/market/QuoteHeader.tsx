@@ -58,7 +58,7 @@ export function QuoteHeader({ symbol }: Props) {
             {fmtNumber(lastPrice)}
           </span>
           {change != null && changePct != null && (
-            <span className={`text-[13px] font-medium ${up ? 'text-emerald-400' : 'text-red-400'}`}>
+            <span className={`text-[13px] font-medium ${up ? 'text-green' : 'text-red'}`}>
               {up ? '+' : ''}{fmtNumber(change)} ({up ? '+' : ''}{fmtPercent(changePct)})
             </span>
           )}
@@ -80,7 +80,7 @@ export function QuoteHeader({ symbol }: Props) {
         <Field label="MA200"     value={fmtNumber(quote?.ma200)} />
       </dl>
 
-      {error && <div className="w-full text-[11px] text-red-400">{error}</div>}
+      {error && <div className="w-full text-[11px] text-red">{error}</div>}
     </div>
   )
 }

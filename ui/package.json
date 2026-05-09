@@ -12,6 +12,7 @@
     "dompurify": "^3.4.0",
     "highlight.js": "^11.11.1",
     "lightweight-charts": "^5.1.0",
+    "lucide-react": "^1.14.0",
     "marked": "^15.0.12",
     "marked-highlight": "^2.2.1",
     "react": "^19.1.0",

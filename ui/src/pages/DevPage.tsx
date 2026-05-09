@@ -746,7 +746,7 @@ function ToolExecutePanel({ detail, result, onResult }: ToolExecutePanelProps) {
       {result && result.name === detail.name && (
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-2">
-            <span className={`text-xs font-semibold ${result.data.isError ? 'text-red-400' : 'text-green-400'}`}>
+            <span className={`text-xs font-semibold ${result.data.isError ? 'text-red' : 'text-green'}`}>
               {result.data.isError ? 'ERROR' : 'OK'}
             </span>
             <span className="text-xs text-text-muted">{result.durationMs}ms</span>

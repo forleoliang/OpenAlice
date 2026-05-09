@@ -234,7 +234,7 @@ export function StreamingToolGroup({ tools }: StreamingToolGroupProps) {
           {tool.status === 'running' ? (
             <span className="inline-block w-3 h-3 border-2 border-text-muted/30 border-t-text-muted rounded-full animate-spin" />
           ) : (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-green-500">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-green">
               <polyline points="20 6 9 17 4 12" />
             </svg>
           )}

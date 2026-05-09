@@ -93,7 +93,7 @@ export function KeyMetricsPanel({ symbol }: Props) {
   return (
     <Card title="Key Metrics" info={info}>
       {loading && <div className="text-[12px] text-text-muted">Loading…</div>}
-      {error && !loading && <div className="text-[12px] text-red-400">{error}</div>}
+      {error && !loading && <div className="text-[12px] text-red">{error}</div>}
       {!loading && !error && data && (
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[12px]">
           {rows.map(([k, v]) => (

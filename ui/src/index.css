@@ -31,6 +31,62 @@ body,
   height: 100%;
 }
 
+/* ==================== Typography scale ====================
+   Five semantic sizes covering the entire app. New code should
+   prefer these over arbitrary `text-[Npx]` so size choices stay
+   consistent and a future global tweak is one edit.
+   - .text-display  hero numbers (UTA NLV, Portfolio total)
+   - .text-title    page H2 / dialog title
+   - .text-body     primary body text, table rows, buttons
+   - .text-caption  secondary descriptions, subtitles
+   - .text-micro    badges, timestamps, table metadata */
+
+.text-display {
+  @apply text-[28px] md:text-[36px] font-bold leading-tight tabular-nums;
+}
+.text-title {
+  @apply text-[16px] font-semibold leading-snug;
+}
+.text-body {
+  @apply text-[13px] leading-relaxed;
+}
+.text-caption {
+  @apply text-[12px] leading-relaxed;
+}
+.text-micro {
+  @apply text-[11px] tracking-wide;
+}
+
+/* ==================== Live-data pulse ====================
+   Small breathing dot used in PageHeader to communicate "this
+   surface is auto-refreshing". 2.4s cycle so it reads as ambient
+   not anxious. Color is the success/green token to keep the
+   association with "alive + healthy". */
+
+@keyframes live-pulse {
+  0%, 100% {
+    opacity: 0.55;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+.live-pulse {
+  animation: live-pulse 2.4s ease-in-out infinite;
+}
+.live-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 9999px;
+  background: var(--color-green);
+  opacity: 0.3;
+  animation: live-pulse 2.4s ease-in-out infinite;
+  animation-delay: 0.3s;
+}
+
 /* ==================== Button utility classes ==================== */
 
 .btn-primary {

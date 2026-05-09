@@ -86,7 +86,7 @@ export function ContextMenu({ anchor, items, onClose }: ContextMenuProps) {
         }
         const disabled = item.disabled === true
         const colorClass = item.danger
-          ? 'text-red-400 hover:bg-red-400/10'
+          ? 'text-red hover:bg-red/10'
           : 'text-text hover:bg-bg-tertiary'
         return (
           <button

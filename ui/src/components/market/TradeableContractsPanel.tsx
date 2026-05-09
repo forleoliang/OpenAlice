@@ -53,7 +53,7 @@ export function TradeableContractsPanel({ symbol, assetClass }: Props) {
   return (
     <Card title="Tradeable on configured brokers" info={info}>
       {loading && <div className="text-[12px] text-text-muted">Searching brokers…</div>}
-      {error && !loading && <div className="text-[12px] text-red-400">{error}</div>}
+      {error && !loading && <div className="text-[12px] text-red">{error}</div>}
 
       {!loading && !error && utasConfigured === 0 && (
         <div className="text-[12px] text-text-muted">

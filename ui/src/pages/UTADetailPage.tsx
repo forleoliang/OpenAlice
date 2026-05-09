@@ -39,6 +39,7 @@ export function UTADetailPage({ spec }: UTADetailPageProps) {
   const [orderMode, setOrderMode] = useState<OrderEntryMode | null>(null)
   const [dataError, setDataError] = useState<string | null>(null)
   const [expandedSnapshot, setExpandedSnapshot] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   useEffect(() => {
     api.trading.getBrokerPresets().then(r => setPresets(r.presets)).catch(() => {})
@@ -61,6 +62,7 @@ export function UTADetailPage({ spec }: UTADetailPageProps) {
       setAccount(acct)
       setPositions(pos.positions)
       setOrders(ord.orders)
+      setLastUpdated(new Date())
     } catch (err) {
       setDataError(err instanceof Error ? err.message : String(err))
     }
@@ -156,6 +158,7 @@ export function UTADetailPage({ spec }: UTADetailPageProps) {
     <div className="flex flex-col flex-1 min-h-0">
       <PageHeader
         title={preset?.label ?? uta.id}
+        live={{ lastUpdated }}
         description={
           <>
             <Link to="/trading" className="text-text-muted hover:text-text">← Trading</Link>
