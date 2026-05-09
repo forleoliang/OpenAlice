@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { readFile, writeFile, mkdir, unlink, rm } from 'fs/promises'
 import { resolve } from 'path'
 import { newsCollectorSchema } from '../domain/news/config.js'
+import { runMigrations } from '../migrations/runner.js'
 
 const CONFIG_DIR = resolve('data/config')
 
@@ -41,11 +42,38 @@ const apiKeysSchema = z.object({
   google: z.string().optional(),
 })
 
+// ==================== Credential layer (introduced by 0002) ====================
+
+export const credentialVendorEnum = z.enum([
+  'anthropic', 'openai', 'google',
+  'minimax', 'glm', 'kimi', 'deepseek', 'custom',
+])
+export type CredentialVendor = z.infer<typeof credentialVendorEnum>
+
+export const credentialAuthTypeEnum = z.enum(['api-key', 'subscription'])
+export type CredentialAuthType = z.infer<typeof credentialAuthTypeEnum>
+
+export const credentialSchema = z.object({
+  vendor: credentialVendorEnum,
+  authType: credentialAuthTypeEnum,
+  /** Present for api-key credentials; absent for subscription credentials. */
+  apiKey: z.string().optional(),
+  /** Optional region / custom endpoint. */
+  baseUrl: z.string().optional(),
+})
+export type Credential = z.infer<typeof credentialSchema>
+
 const baseProfileFields = {
   /** Preset ID this profile was created from (for constraint enforcement on edit). */
   preset: z.string().optional(),
   baseUrl: z.string().optional(),
   apiKey: z.string().optional(),
+  /**
+   * Pointer into aiProviderSchema.credentials. When present, resolveProfile()
+   * joins the credential's apiKey/baseUrl into the resolved shape (profile's
+   * own inline values still win if set — transitional).
+   */
+  credentialSlug: z.string().optional(),
 }
 
 export const agentSdkProfileSchema = z.object({
@@ -77,6 +105,12 @@ export type Profile = z.infer<typeof profileSchema>
 
 export const aiProviderSchema = z.object({
   apiKeys: apiKeysSchema.default({}),
+  /**
+   * Credentials by slug — extracted from profiles by 0002_extract_credentials.
+   * Profile's `credentialSlug` points here. Inline credential fields on the
+   * profile remain as transitional fallback.
+   */
+  credentials: z.record(z.string(), credentialSchema).default({}),
   profiles: z.record(
     z.string(),
     profileSchema,
@@ -353,158 +387,13 @@ async function parseAndSeed<T>(filename: string, schema: z.ZodType<T>, raw: unkn
 }
 
 export async function loadConfig(): Promise<Config> {
+  // Run pending migrations before reading any section. Each migration is
+  // recorded in data/config/_meta.json; the runner is a no-op when nothing
+  // is pending. See src/migrations/INDEX.md for the full list.
+  await runMigrations()
+
   const files = ['engine.json', 'agent.json', 'crypto.json', 'securities.json', 'market-data.json', 'compaction.json', 'ai-provider-manager.json', 'heartbeat.json', 'snapshot.json', 'connectors.json', 'news.json', 'tools.json', 'webhook.json'] as const
   const raws = await Promise.all(files.map((f) => loadJsonFile(f)))
-
-  // TODO: remove all migration blocks before v1.0 — no stable release yet, breaking changes are fine
-  // ---------- Migration: flat ai-provider config → profile-based ----------
-  const aiProviderRaw = raws[6] as Record<string, unknown> | undefined
-  if (aiProviderRaw && 'backend' in aiProviderRaw && !('profiles' in aiProviderRaw)) {
-    // Legacy flat format detected — convert to profile-based
-
-    // Step 1: handle very old format (model.json + api-keys.json)
-    if (!('model' in aiProviderRaw)) {
-      const oldModel = await loadJsonFile('model.json') as Record<string, unknown> | undefined
-      const oldKeys = await loadJsonFile('api-keys.json') as Record<string, unknown> | undefined
-      if (oldModel) Object.assign(aiProviderRaw, { provider: oldModel.provider, model: oldModel.model, ...(oldModel.baseUrl ? { baseUrl: oldModel.baseUrl } : {}) })
-      if (oldKeys) aiProviderRaw.apiKeys = oldKeys
-      await removeJsonFile('model.json')
-      await removeJsonFile('api-keys.json')
-    }
-
-    // Step 2: handle claude-code → agent-sdk alias
-    if (aiProviderRaw.backend === 'claude-code') {
-      aiProviderRaw.backend = 'agent-sdk'
-      aiProviderRaw.loginMethod = aiProviderRaw.loginMethod ?? 'claudeai'
-    }
-
-    // Step 3: build default profile from flat config
-    const legacy = aiProviderLegacySchema.parse(aiProviderRaw)
-    const defaultProfile: Record<string, unknown> = { label: 'Default' }
-    if (legacy.backend === 'agent-sdk') {
-      defaultProfile.backend = 'agent-sdk'
-      defaultProfile.model = legacy.model
-      defaultProfile.loginMethod = legacy.loginMethod === 'codex-oauth' ? 'api-key' : legacy.loginMethod
-    } else if (legacy.backend === 'codex') {
-      defaultProfile.backend = 'codex'
-      defaultProfile.model = legacy.model
-      defaultProfile.loginMethod = legacy.loginMethod === 'claudeai' ? 'codex-oauth' : legacy.loginMethod
-    } else {
-      defaultProfile.backend = 'vercel-ai-sdk'
-      defaultProfile.provider = legacy.provider
-      defaultProfile.model = legacy.model
-    }
-    if (legacy.baseUrl) defaultProfile.baseUrl = legacy.baseUrl
-
-    // Step 4: migrate subchannel inline overrides → named profiles
-    const oldSubchannels = await loadJsonFile('web-subchannels.json') as Array<Record<string, unknown>> | undefined
-    const profiles: Record<string, unknown> = { default: defaultProfile }
-    const newSubchannels: Array<Record<string, unknown>> = []
-
-    if (oldSubchannels) {
-      for (const ch of oldSubchannels) {
-        const sub: Record<string, unknown> = { id: ch.id, label: ch.label }
-        if (ch.systemPrompt) sub.systemPrompt = ch.systemPrompt
-        if (ch.disabledTools) sub.disabledTools = ch.disabledTools
-
-        const provider = ch.provider as string | undefined
-        const override = provider === 'vercel-ai-sdk' ? ch.vercelAiSdk
-          : provider === 'agent-sdk' ? ch.agentSdk
-          : provider === 'codex' ? ch.codex
-          : undefined
-
-        if (provider && override) {
-          const slug = `${ch.id}-${provider}`
-          profiles[slug] = { backend: provider, label: `${ch.label}`, ...(override as object) }
-          sub.profile = slug
-        } else if (provider) {
-          // Provider set but no override — create a profile with just the backend
-          const slug = `${ch.id}-${provider}`
-          profiles[slug] = { ...defaultProfile, backend: provider, label: `${ch.label}` }
-          sub.profile = slug
-        }
-
-        newSubchannels.push(sub)
-      }
-      await writeFile(resolve(CONFIG_DIR, 'web-subchannels.json'), JSON.stringify(newSubchannels, null, 2) + '\n')
-    }
-
-    // Step 5: write new format
-    const migrated = { apiKeys: legacy.apiKeys, profiles, activeProfile: 'default' }
-    raws[6] = migrated
-    await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(migrated, null, 2) + '\n')
-  } else if (aiProviderRaw && !('backend' in aiProviderRaw) && !('profiles' in aiProviderRaw)) {
-    // Very old format (no backend, no profiles) — handle model.json merge first
-    const oldModel = await loadJsonFile('model.json') as Record<string, unknown> | undefined
-    const oldKeys = await loadJsonFile('api-keys.json') as Record<string, unknown> | undefined
-    const migrated = {
-      apiKeys: oldKeys ?? {},
-      profiles: {
-        default: {
-          backend: 'agent-sdk',
-          label: 'Default',
-          model: (oldModel?.model as string) ?? 'claude-opus-4-7',
-          loginMethod: 'claudeai',
-          provider: (oldModel?.provider as string) ?? 'anthropic',
-        },
-      },
-      activeProfile: 'default',
-    }
-    raws[6] = migrated
-    await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(migrated, null, 2) + '\n')
-    await removeJsonFile('model.json')
-    await removeJsonFile('api-keys.json')
-  }
-
-  // ---------- Migration: distribute global apiKeys into profiles ----------
-  const aiConfigAfterMigration = raws[6] as Record<string, unknown> | undefined
-  if (aiConfigAfterMigration && 'apiKeys' in aiConfigAfterMigration && 'profiles' in aiConfigAfterMigration) {
-    const keys = aiConfigAfterMigration.apiKeys as Record<string, string> | undefined
-    const profiles = aiConfigAfterMigration.profiles as Record<string, Record<string, unknown>>
-    if (keys && Object.values(keys).some(Boolean)) {
-      let changed = false
-      for (const profile of Object.values(profiles)) {
-        if (profile.apiKey) continue // already has a key, don't overwrite
-        const vendor = profile.backend === 'codex' ? 'openai'
-          : profile.backend === 'agent-sdk' ? 'anthropic'
-          : (profile.provider as string) ?? 'anthropic'
-        const globalKey = keys[vendor]
-        if (globalKey) {
-          profile.apiKey = globalKey
-          changed = true
-        }
-      }
-      if (changed) {
-        delete aiConfigAfterMigration.apiKeys
-        raws[6] = aiConfigAfterMigration
-        await mkdir(CONFIG_DIR, { recursive: true })
-        await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(aiConfigAfterMigration, null, 2) + '\n')
-      }
-    }
-  }
-
-  // ---------- Migration: consolidate old telegram.json + engine port fields ----------
-  const connectorsRaw = raws[9] as Record<string, unknown> | undefined
-  if (connectorsRaw === undefined) {
-    const oldTelegram = await loadJsonFile('telegram.json')
-    const oldEngine = raws[0] as Record<string, unknown> | undefined
-    const migrated: Record<string, unknown> = {}
-    if (oldTelegram && typeof oldTelegram === 'object') {
-      migrated.telegram = { ...(oldTelegram as Record<string, unknown>), enabled: true }
-    }
-    if (oldEngine) {
-      if (oldEngine.webPort !== undefined) migrated.web = { port: oldEngine.webPort }
-      if (oldEngine.mcpPort !== undefined) migrated.mcp = { port: oldEngine.mcpPort }
-      if (oldEngine.askMcpPort !== undefined) migrated.mcpAsk = { enabled: true, port: oldEngine.askMcpPort }
-      const { mcpPort: _m, askMcpPort: _a, webPort: _w, ...cleanEngine } = oldEngine
-      raws[0] = cleanEngine
-      await mkdir(CONFIG_DIR, { recursive: true })
-      await writeFile(resolve(CONFIG_DIR, 'engine.json'), JSON.stringify(cleanEngine, null, 2) + '\n')
-    }
-    raws[9] = Object.keys(migrated).length > 0 ? migrated : undefined
-  }
 
   return {
     engine:        await parseAndSeed(files[0], engineSchema, raws[0]),
@@ -799,13 +688,74 @@ export interface ResolvedProfile {
   provider?: string
 }
 
-/** Resolve a profile by slug. API key comes from the profile directly. */
+/**
+ * Resolve a profile by slug. When the profile carries a `credentialSlug`,
+ * the referenced credential's apiKey/baseUrl are joined into the resolved
+ * shape — but profile-level inline values still win when present, so the
+ * 0002 migration can safely leave inline fields in place as transitional
+ * fallback. The returned `ResolvedProfile` shape is unchanged.
+ */
 export async function resolveProfile(slug?: string): Promise<ResolvedProfile> {
   const config = await readAIProviderConfig()
   const key = slug ?? config.activeProfile
   const profile = config.profiles[key]
   if (!profile) throw new Error(`Unknown AI provider profile: "${key}"`)
+
+  if (profile.credentialSlug) {
+    const cred = config.credentials[profile.credentialSlug]
+    if (!cred) {
+      throw new Error(
+        `Profile "${key}" references missing credential "${profile.credentialSlug}"`,
+      )
+    }
+    return {
+      ...profile,
+      apiKey: profile.apiKey ?? cred.apiKey,
+      baseUrl: profile.baseUrl ?? cred.baseUrl,
+    }
+  }
   return { ...profile }
+}
+
+// ==================== Credential Helpers ====================
+
+/** Read a credential by slug. Throws if missing. */
+export async function resolveCredential(slug: string): Promise<Credential> {
+  const config = await readAIProviderConfig()
+  const cred = config.credentials[slug]
+  if (!cred) throw new Error(`Unknown credential: "${slug}"`)
+  return { ...cred }
+}
+
+/** Read all credentials as a slug-keyed map. */
+export async function readCredentials(): Promise<Record<string, Credential>> {
+  const config = await readAIProviderConfig()
+  return { ...config.credentials }
+}
+
+/** Write a single credential (create or update). */
+export async function writeCredential(slug: string, credential: Credential): Promise<void> {
+  const config = await readAIProviderConfig()
+  const validated = credentialSchema.parse(credential)
+  config.credentials[slug] = validated
+  await mkdir(CONFIG_DIR, { recursive: true })
+  await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(config, null, 2) + '\n')
+}
+
+/** Delete a credential. Errors if any profile still references it. */
+export async function deleteCredential(slug: string): Promise<void> {
+  const config = await readAIProviderConfig()
+  const referencingProfiles = Object.entries(config.profiles)
+    .filter(([, p]) => p.credentialSlug === slug)
+    .map(([slug]) => slug)
+  if (referencingProfiles.length > 0) {
+    throw new Error(
+      `Cannot delete credential "${slug}" — referenced by profile(s): ${referencingProfiles.join(', ')}`,
+    )
+  }
+  delete config.credentials[slug]
+  await mkdir(CONFIG_DIR, { recursive: true })
+  await writeFile(resolve(CONFIG_DIR, 'ai-provider-manager.json'), JSON.stringify(config, null, 2) + '\n')
 }
 
 /** Get the active profile slug. */
