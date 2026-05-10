@@ -9,6 +9,7 @@ import { SessionStore } from '../../core/session.js'
 import type { CronFirePayload } from './engine.js'
 import { ConnectorCenter } from '../../core/connector-center.js'
 import { createMemoryNotificationsStore } from '../../core/notifications-store.js'
+import { AgentWorkRunner } from '../../core/agent-work.js'
 
 function tempPath(ext: string): string {
   return join(tmpdir(), `cron-listener-test-${randomUUID()}.${ext}`)
@@ -54,9 +55,12 @@ describe('cron listener', () => {
     notificationsStore = createMemoryNotificationsStore()
     connectorCenter = new ConnectorCenter({ notificationsStore })
 
-    cronListener = createCronListener({
-      connectorCenter,
+    const agentWorkRunner = new AgentWorkRunner({
       agentCenter: mockEngine as any,
+      connectorCenter,
+    })
+    cronListener = createCronListener({
+      agentWorkRunner,
       registry,
       session,
     })

@@ -35,6 +35,8 @@ import { ConnectorCenter } from './core/connector-center.js'
 import { createNotificationsStore } from './core/notifications-store.js'
 import { ToolCenter } from './core/tool-center.js'
 import { AgentCenter } from './core/agent-center.js'
+import { AgentWorkRunner } from './core/agent-work.js'
+import { createNotifyUserTool } from './tool/notify-user.js'
 import { GenerateRouter } from './core/ai-provider-manager.js'
 import { VercelAIProvider } from './ai-providers/vercel-ai-sdk/vercel-provider.js'
 import { AgentSdkProvider } from './ai-providers/agent-sdk/agent-sdk-provider.js'
@@ -244,6 +246,7 @@ async function main() {
   }
   toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient, commodityClient), 'analysis')
   toolCenter.register(createEconomyTools(economyClient, commodityClient), 'economy')
+  toolCenter.register(createNotifyUserTool(), 'notify')
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered`)
 
@@ -278,11 +281,15 @@ async function main() {
   // Session awareness tools (registered here because they need connectorCenter)
   toolCenter.register(createSessionTools(connectorCenter), 'session')
 
+  // ==================== AgentWork runner — shared by all autonomous trigger sources ====================
+
+  const agentWorkRunner = new AgentWorkRunner({ agentCenter, connectorCenter })
+
   // ==================== Cron Listener ====================
 
   const cronSession = new SessionStore('cron/default')
   await cronSession.restore()
-  const cronListener = createCronListener({ connectorCenter, agentCenter, registry: listenerRegistry, session: cronSession })
+  const cronListener = createCronListener({ agentWorkRunner, registry: listenerRegistry, session: cronSession })
   await cronListener.start()
 
   // ==================== Snapshot Scheduler ====================
@@ -297,7 +304,7 @@ async function main() {
 
   const heartbeat = createHeartbeat({
     config: config.heartbeat,
-    connectorCenter, cronEngine, agentCenter, registry: listenerRegistry,
+    agentWorkRunner, cronEngine, registry: listenerRegistry,
   })
   await heartbeat.start()
   if (config.heartbeat.enabled) {
@@ -306,7 +313,7 @@ async function main() {
 
   // ==================== Task Router (external `task.requested` handler) ====================
 
-  const taskRouter = createTaskRouter({ connectorCenter, agentCenter, registry: listenerRegistry })
+  const taskRouter = createTaskRouter({ agentWorkRunner, registry: listenerRegistry })
   await taskRouter.start()
 
   // ==================== Event Metrics (wildcard observer) ====================

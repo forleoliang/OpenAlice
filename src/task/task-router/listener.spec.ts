@@ -8,6 +8,8 @@ import { createTaskRouter, type TaskRouter } from './listener.js'
 import { SessionStore } from '../../core/session.js'
 import type { TaskRequestedPayload } from '../../core/agent-event.js'
 import { ConnectorCenter } from '../../core/connector-center.js'
+import { createMemoryNotificationsStore } from '../../core/notifications-store.js'
+import { AgentWorkRunner } from '../../core/agent-work.js'
 
 function tempPath(ext: string): string {
   return join(tmpdir(), `task-router-test-${randomUUID()}.${ext}`)
@@ -45,11 +47,14 @@ describe('task router', () => {
     registry = createListenerRegistry(eventLog)
     mockEngine = createMockEngine()
     session = new SessionStore(`test/task-${randomUUID()}`)
-    connectorCenter = new ConnectorCenter()
+    connectorCenter = new ConnectorCenter({ notificationsStore: createMemoryNotificationsStore() })
 
-    taskRouter = createTaskRouter({
-      connectorCenter,
+    const agentWorkRunner = new AgentWorkRunner({
       agentCenter: mockEngine as any,
+      connectorCenter,
+    })
+    taskRouter = createTaskRouter({
+      agentWorkRunner,
       registry,
       session,
     })
