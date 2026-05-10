@@ -13,6 +13,7 @@
  */
 
 import type { AskOptions, ProviderResult, ProviderEvent, GenerateOpts } from './ai-provider-manager.js'
+import type { ToolCallSummary } from '../ai-providers/types.js'
 import type { ResolvedProfile } from './config.js'
 import { GenerateRouter, StreamableResult } from './ai-provider-manager.js'
 import { resolveProfile, resolveCredential } from './config.js'
@@ -131,6 +132,11 @@ export class AgentCenter {
     let currentAssistantBlocks: ContentBlock[] = []
     let currentUserBlocks: ContentBlock[] = []
     let finalResult: ProviderResult | null = null
+    // Tool calls observed during this generation, captured for the final
+    // done event so AgentWork (and any other consumer awaiting the
+    // ProviderResult) can inspect what the AI invoked without having to
+    // re-stream the events themselves.
+    const toolCalls: ToolCallSummary[] = []
 
     for await (const event of source) {
       switch (event.type) {
@@ -143,6 +149,7 @@ export class AgentCenter {
           // Unified logging — all providers get this now
           logToolCall(event.name, event.input)
           this.toolCallLog?.start(event.id, event.name, event.input, session.id)
+          toolCalls.push({ id: event.id, name: event.name, input: event.input })
           currentAssistantBlocks.push({
             type: 'tool_use',
             id: event.id,
@@ -227,7 +234,7 @@ export class AgentCenter {
     ]
     await session.appendAssistant(finalBlocks, provider.providerTag)
 
-    // 9. Yield done with merged media
+    // 9. Yield done with merged media + observed tool calls
     const mediaUrls = mediaBlocks.map(b => (b as { type: 'image'; url: string }).url)
     yield {
       type: 'done',
@@ -235,6 +242,7 @@ export class AgentCenter {
         text: finalResult.text,
         media: allMedia,
         mediaUrls,
+        toolCalls,
       },
     }
   }

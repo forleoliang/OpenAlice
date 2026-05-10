@@ -14,10 +14,23 @@ export type ProviderEvent =
 
 // ==================== Types ====================
 
+/** A tool the AI invoked during this generation. Captured by AgentCenter
+ *  as `tool_use` events stream through the pipeline. Used by AgentWork's
+ *  outputGate to detect intent-signal tools like `notify_user`. */
+export interface ToolCallSummary {
+  id: string
+  name: string
+  input: unknown
+}
+
 export interface ProviderResult {
   text: string
   media: MediaAttachment[]
   mediaUrls?: string[]
+  /** Tool calls observed during this generation, in invocation order.
+   *  AgentCenter populates this when it synthesizes the final done event;
+   *  individual providers don't need to fill it themselves. */
+  toolCalls?: ReadonlyArray<ToolCallSummary>
 }
 
 // ==================== GenerateOpts ====================
