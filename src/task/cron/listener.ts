@@ -3,15 +3,16 @@
  * canonical `agent.work.requested` events. The agent-work-listener
  * picks them up and runs the AI dispatch pipeline.
  *
- * Filters out internal `__*__` jobs (heartbeat / snapshot have their
- * own handlers). Serial-execution lock preserved from previous design
- * so concurrent fires don't overlap.
- *
- * No notification policy lives here — every successful cron reply is
+ * Serial-execution lock so concurrent fires don't overlap. No
+ * notification policy lives here — every successful cron reply is
  * pushed (the AgentWork default). Cron jobs that want
  * AI-decides-to-notify semantics can teach their prompt about
  * `notify_user`; the source config registered here doesn't reference
  * any output gate, so the default deliver-result.text behaviour wins.
+ *
+ * Internal jobs (heartbeat / snapshot) no longer live in the cron
+ * engine — they each own their own Pump now. So there's no
+ * `__*__` filter needed in this listener anymore.
  */
 
 import type { EventLogEntry } from '../../core/event-log.js'
@@ -20,10 +21,6 @@ import { SessionStore } from '../../core/session.js'
 import type { Listener, ListenerContext } from '../../core/listener.js'
 import type { ListenerRegistry } from '../../core/listener-registry.js'
 import type { AgentWorkListener, AgentWorkSourceConfig } from '../../core/agent-work-listener.js'
-
-function isInternalJob(name: string): boolean {
-  return name.startsWith('__') && name.endsWith('__')
-}
 
 const CRON_EMITS = ['agent.work.requested'] as const
 type CronEmits = typeof CRON_EMITS
@@ -77,9 +74,6 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
       ctx: ListenerContext<CronEmits>,
     ): Promise<void> {
       const payload = entry.payload
-
-      // Internal jobs have dedicated handlers (heartbeat / snapshot)
-      if (isInternalJob(payload.jobName)) return
 
       if (processing) {
         console.warn(`cron-listener: skipping job ${payload.jobId} (already processing)`)

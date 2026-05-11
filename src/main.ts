@@ -313,6 +313,21 @@ async function main() {
     buildErrorMetadata: (req) => ({ prompt: req.prompt }),
   })
 
+  // ==================== One-time migration: clean orphan internal cron jobs ====================
+  //
+  // Prior to the Pump refactor, heartbeat and snapshot registered their
+  // schedules as internal cron jobs (__heartbeat__, __snapshot__) inside
+  // the cron engine. They now own private Pumps. Any pre-existing entries
+  // in data/cron/jobs.json are orphan disk state — clean them up so
+  // they don't show in the Automation > Cron UI and don't take up
+  // memory in cron-engine.
+  for (const job of cronEngine.list()) {
+    if (job.name.startsWith('__') && job.name.endsWith('__')) {
+      console.log(`cron: removing orphan internal job ${job.name} (${job.id})`)
+      await cronEngine.remove(job.id)
+    }
+  }
+
   // ==================== Cron Listener ====================
 
   const cronSession = new SessionStore('cron/default')
@@ -320,19 +335,19 @@ async function main() {
   const cronListener = createCronListener({ agentWorkListener, registry: listenerRegistry, session: cronSession })
   await cronListener.start()
 
-  // ==================== Snapshot Scheduler ====================
+  // ==================== Snapshot Scheduler (Pump-driven) ====================
 
-  const snapshotScheduler = createSnapshotScheduler({ snapshotService, cronEngine, registry: listenerRegistry, config: config.snapshot })
+  const snapshotScheduler = createSnapshotScheduler({ snapshotService, config: config.snapshot })
   await snapshotScheduler.start()
   if (config.snapshot.enabled) {
     console.log(`snapshot: scheduler started (every ${config.snapshot.every})`)
   }
 
-  // ==================== Heartbeat ====================
+  // ==================== Heartbeat (Pump-driven) ====================
 
   const heartbeat = createHeartbeat({
     config: config.heartbeat,
-    agentWorkListener, cronEngine, registry: listenerRegistry,
+    agentWorkListener, registry: listenerRegistry,
     session: new SessionStore('heartbeat'),
   })
   await heartbeat.start()

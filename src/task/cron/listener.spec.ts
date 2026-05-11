@@ -119,19 +119,10 @@ describe('cron listener', () => {
       expect(typeof done.causedBy).toBe('number')
     })
 
-    it('filters out internal __*__ jobs', async () => {
-      await eventLog.append('cron.fire', {
-        jobId: 'hb-id',
-        jobName: '__heartbeat__',
-        payload: 'should be ignored by cron-router',
-      } satisfies CronFirePayload)
-
-      await new Promise((r) => setTimeout(r, 50))
-
-      // cron-router didn't emit anything (its filter dropped this)
-      const requested = eventLog.recent({ type: 'agent.work.requested' })
-      expect(requested.filter(e => (e.payload as { source: string }).source === 'cron')).toHaveLength(0)
-    })
+    // Note: pre-Pump refactor, cron-router filtered `__*__` jobs to avoid
+    // double-handling heartbeat / snapshot. After the Pump migration, these
+    // internal jobs no longer live in the cron engine at all — so the
+    // filter has been removed. Test deleted alongside the dead code.
 
     it('does not react to other event types', async () => {
       await eventLog.append('message.received' as never, { channel: 'web', to: 'x', prompt: 'p' })

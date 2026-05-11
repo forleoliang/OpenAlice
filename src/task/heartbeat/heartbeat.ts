@@ -1,45 +1,41 @@
 /**
- * Heartbeat — periodic Alice self-check.
+ * Heartbeat — periodic Alice self-check, Pump-driven.
  *
- * Today's shape: a trigger source for `agent.work.requested`. Owns
- * the `__heartbeat__` cron job lifecycle, the active-hours config,
- * and the in-memory dedup window. On each tick:
+ * Heartbeat is a recurring "ping Alice every N minutes" service. Prior
+ * to this commit, it piggy-backed on the cron engine: registered an
+ * internal `__heartbeat__` cron job, subscribed to `cron.fire` filtered
+ * by jobName, did its work in the handler. That was conceptual debt —
+ * the cron engine should be reserved for user-defined cron jobs from
+ * the Automation > Cron UI, and heartbeat's lifecycle (active-hours,
+ * dedup, hot enable/disable, configured prompt) doesn't belong in a
+ * "user cron job" shape.
  *
- *   1. Active-hours pre-filter (inputGate equivalent — but enforced
- *      pre-emit so we don't pollute the event log with skip events
- *      when the heartbeat shouldn't have fired in the first place).
- *      Outside hours → emit `agent.work.skip { source: 'heartbeat',
- *      reason: 'outside-active-hours' }` directly via ctx.emit.
+ * Now: heartbeat owns a private Pump for its schedule and a
+ * ProducerHandle for `agent.work.{requested,skip}` emits. The cron
+ * engine is no longer in its dependency graph.
+ *
+ * On each tick:
+ *   1. Active-hours pre-filter. Outside hours → emit
+ *      `agent.work.skip { source: 'heartbeat', reason: 'outside-active-hours' }`
+ *      and return; AI is never invoked, no token cost.
  *   2. Otherwise emit `agent.work.requested { source: 'heartbeat',
- *      prompt }`. The agent-work-listener picks it up and runs.
- *   3. The heartbeat-specific outputGate (dedup + notify_user
- *      inspection) lives in the source config registered with
- *      agent-work-listener at startup. The runner-side gate sees
- *      the AI's tool calls and decides deliver vs skip.
+ *      prompt }`. The agent-work-listener routes it through the
+ *      heartbeat source config (notify_user inspection + dedup gate)
+ *      registered at start().
  *
- * Heartbeat no longer imports AgentWorkRunner directly. State that
- * heartbeat owns (HeartbeatDedup, active-hours, cron job lifecycle)
- * stays here; AgentWork-pipeline state (session, gates) is registered
- * with the listener.
+ * State heartbeat owns: HeartbeatDedup (24h window), active-hours
+ * config, the Pump, the ProducerHandle, the source config registered
+ * with agent-work-listener. AgentWork pipeline state (sessions,
+ * AI invocation) lives elsewhere.
  */
 
-import type { Listener, ListenerContext } from '../../core/listener.js'
-import type { ListenerRegistry } from '../../core/listener-registry.js'
 import { SessionStore } from '../../core/session.js'
 import { writeConfigSection } from '../../core/config.js'
-import type { CronEngine } from '../cron/engine.js'
+import type { ListenerRegistry } from '../../core/listener-registry.js'
+import type { ProducerHandle } from '../../core/producer.js'
+import { createPump, type Pump } from '../../core/pump.js'
 import type { AgentWorkListener, AgentWorkSourceConfig } from '../../core/agent-work-listener.js'
 import type { AgentWorkResultProbe } from '../../core/agent-work.js'
-
-const HEARTBEAT_EMITS = [
-  'agent.work.requested',
-  'agent.work.skip',
-] as const
-type HeartbeatEmits = typeof HEARTBEAT_EMITS
-
-// ==================== Constants ====================
-
-export const HEARTBEAT_JOB_NAME = '__heartbeat__'
 
 // ==================== Config ====================
 
@@ -79,8 +75,9 @@ export interface HeartbeatOpts {
   /** Where to register the heartbeat source config so the agent-work
    *  pipeline knows how to handle heartbeat-sourced requests. */
   agentWorkListener: AgentWorkListener
-  cronEngine: CronEngine
-  /** Listener registry for the heartbeat's own cron-fire subscriber. */
+  /** Listener registry — used to declare the heartbeat producer so its
+   *  agent.work.{requested,skip} emits are validated + show in the
+   *  topology graph. */
   registry: ListenerRegistry
   /** Optional: inject a session for testing. */
   session?: SessionStore
@@ -91,34 +88,34 @@ export interface HeartbeatOpts {
 export interface Heartbeat {
   start(): Promise<void>
   stop(): void
-  /** Hot-toggle heartbeat on/off (persists to config + updates cron job). */
+  /** Hot-toggle heartbeat on/off (persists to config + updates pump). */
   setEnabled(enabled: boolean): Promise<void>
   /** Current enabled state. */
   isEnabled(): boolean
-  /** Expose the raw listener for direct testing. */
-  readonly listener: Listener<'cron.fire', HeartbeatEmits>
+  /** Manually trigger a heartbeat tick — used by tests and "run now" UI. */
+  runNow(): Promise<void>
 }
 
 // ==================== Factory ====================
 
 export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
-  const { config, agentWorkListener, cronEngine, registry } = opts
+  const { config, agentWorkListener, registry } = opts
   const session = opts.session ?? new SessionStore('heartbeat')
   const now = opts.now ?? Date.now
 
-  let jobId: string | null = null
-  let processing = false
   let enabled = config.enabled
-  let registered = false
+  let started = false
+  let producer: ProducerHandle<readonly ['agent.work.requested', 'agent.work.skip']> | null = null
+  let pump: Pump | null = null
 
   const dedup = new HeartbeatDedup()
 
   // ---- Source config (registered with agent-work-listener) ----
   //
-  // The output-side semantics (notify_user inspection + dedup gate)
-  // live here, closing over the dedup instance heartbeat owns. The
-  // agent-work-listener calls these when an agent.work.requested
-  // event with source='heartbeat' arrives.
+  // Output-side semantics (notify_user inspection + dedup gate) live
+  // here, closing over the dedup instance heartbeat owns. The
+  // agent-work-listener calls these when an agent.work.requested event
+  // with source='heartbeat' arrives.
   const sourceConfig: AgentWorkSourceConfig = {
     source: 'heartbeat',
     session,
@@ -145,89 +142,67 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
     onDelivered: (text) => dedup.record(text, now()),
   }
 
-  const listener: Listener<'cron.fire', HeartbeatEmits> = {
-    name: 'heartbeat',
-    subscribes: 'cron.fire',
-    emits: HEARTBEAT_EMITS,
-    async handle(entry, ctx: ListenerContext<HeartbeatEmits>) {
-      const payload = entry.payload
+  /** The pump's tick callback — active-hours guard then emit. */
+  async function onTick(): Promise<void> {
+    const startMs = now()
+    console.log(`heartbeat: firing at ${new Date(startMs).toISOString()}`)
 
-      // Filter to our own cron job
-      if (payload.jobName !== HEARTBEAT_JOB_NAME) return
-
-      // Serial — preserve today's behaviour. Concurrent heartbeats
-      // would race on dedup state.
-      if (processing) return
-
-      processing = true
-      const startMs = now()
-      console.log(`heartbeat: firing at ${new Date(startMs).toISOString()}`)
-      try {
-        // ---- Pre-emit gate: active-hours ----
-        if (!isWithinActiveHours(config.activeHours, now())) {
-          await ctx.emit('agent.work.skip', {
-            source: 'heartbeat',
-            reason: 'outside-active-hours',
-          })
-          console.log(`heartbeat: skipped (outside-active-hours)`)
-          return
-        }
-
-        // ---- Emit canonical request ----
-        await ctx.emit('agent.work.requested', {
-          source: 'heartbeat',
-          prompt: payload.payload,
-        })
-      } finally {
-        processing = false
-      }
-    },
-  }
-
-  /** Ensure the cron job exists and the listener + producer are registered (idempotent). */
-  async function ensureJobAndListener(): Promise<void> {
-    const existing = cronEngine.list().find((j) => j.name === HEARTBEAT_JOB_NAME)
-    if (existing) {
-      jobId = existing.id
-      await cronEngine.update(existing.id, {
-        schedule: { kind: 'every', every: config.every },
-        payload: config.prompt,
-        enabled,
+    if (!isWithinActiveHours(config.activeHours, now())) {
+      await producer!.emit('agent.work.skip', {
+        source: 'heartbeat',
+        reason: 'outside-active-hours',
       })
-    } else {
-      jobId = await cronEngine.add({
-        name: HEARTBEAT_JOB_NAME,
-        schedule: { kind: 'every', every: config.every },
-        payload: config.prompt,
-        enabled,
-      })
+      console.log(`heartbeat: skipped (outside-active-hours)`)
+      return
     }
 
-    if (!registered) {
-      registry.register(listener)
-      agentWorkListener.registerSource(sourceConfig)
-      registered = true
-    }
+    await producer!.emit('agent.work.requested', {
+      source: 'heartbeat',
+      prompt: config.prompt,
+    })
   }
 
   return {
-    listener,
     async start() {
-      await ensureJobAndListener()
+      if (started) return
+      started = true
+
+      producer = registry.declareProducer({
+        name: 'heartbeat',
+        emits: ['agent.work.requested', 'agent.work.skip'] as const,
+      })
+      agentWorkListener.registerSource(sourceConfig)
+
+      pump = createPump({
+        name: 'heartbeat',
+        every: config.every,
+        enabled,
+        onTick,
+      })
+      pump.start()
     },
+
     stop() {
-      if (registered) {
-        registry.unregister(listener.name)
-        registered = false
-      }
+      if (!started) return
+      pump?.stop()
+      pump = null
+      producer?.dispose()
+      producer = null
+      started = false
     },
+
     async setEnabled(newEnabled: boolean) {
       enabled = newEnabled
-      await ensureJobAndListener()
+      pump?.setEnabled(newEnabled)
       await writeConfigSection('heartbeat', { ...config, enabled: newEnabled })
     },
+
     isEnabled() {
       return enabled
+    },
+
+    async runNow() {
+      if (pump) await pump.runNow()
     },
   }
 }
@@ -297,8 +272,7 @@ function currentMinutesInTimezone(tz: string, nowMs?: number): number {
  * collisions are rare, single-duplicate cost is low.
  */
 export class HeartbeatDedup {
-  /** Public for callers that want to inspect the last-delivered text
-   *  (e.g. for the agent.work.done payload's metadata). */
+  /** Public for callers that want to inspect the last-delivered text. */
   public lastText: string | null = null
   private lastSentAt = 0
   private windowMs: number
