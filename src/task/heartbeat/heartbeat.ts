@@ -1,36 +1,41 @@
 /**
- * Heartbeat — periodic AI self-check, built on top of the cron engine.
+ * Heartbeat — periodic Alice self-check, Pump-driven.
  *
- * Registers a cron job (`__heartbeat__`) that fires at a configured interval.
- * When fired, calls the AI engine and filters the response:
- *   1. Active hours guard — skip if outside configured window
- *   2. AI call — agentCenter.askWithSession(prompt, heartbeatSession)
- *   3. Ack token filter — skip if AI says "nothing to report"
- *   4. Dedup — skip if same text was sent within 24h
- *   5. Send — connectorCenter.notify(text)
+ * Heartbeat is a recurring "ping Alice every N minutes" service. Prior
+ * to this commit, it piggy-backed on the cron engine: registered an
+ * internal `__heartbeat__` cron job, subscribed to `cron.fire` filtered
+ * by jobName, did its work in the handler. That was conceptual debt —
+ * the cron engine should be reserved for user-defined cron jobs from
+ * the Automation > Cron UI, and heartbeat's lifecycle (active-hours,
+ * dedup, hot enable/disable, configured prompt) doesn't belong in a
+ * "user cron job" shape.
  *
- * Events written to eventLog:
- *   - heartbeat.done  { reply, durationMs, delivered }
- *   - heartbeat.skip  { reason }
- *   - heartbeat.error { error, durationMs }
+ * Now: heartbeat owns a private Pump for its schedule and a
+ * ProducerHandle for `agent.work.{requested,skip}` emits. The cron
+ * engine is no longer in its dependency graph.
+ *
+ * On each tick:
+ *   1. Active-hours pre-filter. Outside hours → emit
+ *      `agent.work.skip { source: 'heartbeat', reason: 'outside-active-hours' }`
+ *      and return; AI is never invoked, no token cost.
+ *   2. Otherwise emit `agent.work.requested { source: 'heartbeat',
+ *      prompt }`. The agent-work-listener routes it through the
+ *      heartbeat source config (notify_user inspection + dedup gate)
+ *      registered at start().
+ *
+ * State heartbeat owns: HeartbeatDedup (24h window), active-hours
+ * config, the Pump, the ProducerHandle, the source config registered
+ * with agent-work-listener. AgentWork pipeline state (sessions,
+ * AI invocation) lives elsewhere.
  */
 
-import type { EventLogEntry } from '../../core/event-log.js'
-import type { CronFirePayload } from '../../core/agent-event.js'
-import type { AgentCenter } from '../../core/agent-center.js'
 import { SessionStore } from '../../core/session.js'
-import type { ConnectorCenter } from '../../core/connector-center.js'
 import { writeConfigSection } from '../../core/config.js'
-import type { CronEngine } from '../cron/engine.js'
-import type { Listener, ListenerContext } from '../../core/listener.js'
 import type { ListenerRegistry } from '../../core/listener-registry.js'
-
-const HEARTBEAT_EMITS = ['heartbeat.done', 'heartbeat.skip', 'heartbeat.error'] as const
-type HeartbeatEmits = typeof HEARTBEAT_EMITS
-
-// ==================== Constants ====================
-
-export const HEARTBEAT_JOB_NAME = '__heartbeat__'
+import type { ProducerHandle } from '../../core/producer.js'
+import { createPump, type Pump } from '../../core/pump.js'
+import type { AgentWorkListener, AgentWorkSourceConfig } from '../../core/agent-work-listener.js'
+import type { AgentWorkResultProbe } from '../../core/agent-work.js'
 
 // ==================== Config ====================
 
@@ -51,29 +56,15 @@ export interface HeartbeatConfig {
 export const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
   enabled: false,
   every: '30m',
-  prompt: `Check if anything needs attention. Respond using the structured format below.
+  prompt: `You're Alice in the heartbeat monitoring loop. The system pings you periodically so you can check on what's happening — markets, watchlists, pending items, anything trade-relevant the user might want surfaced.
 
-## Response Format
+If something is genuinely worth flagging — a notable move, a finished analysis, an answer to a question they've been waiting on — call the \`notify_user\` tool with a concise message in the user's language.
 
-STATUS: HEARTBEAT_OK | CHAT_YES
-REASON: <brief explanation of your decision>
-CONTENT: <message to deliver, only when STATUS is CHAT_YES>
+If there's nothing worth surfacing, simply respond briefly with what you observed (or with nothing at all). Don't call \`notify_user\` out of politeness; reserve it for genuinely useful pushes — the user gets pinged whenever it fires.
 
-## Rules
-
-- If in doubt, prefer CHAT_YES over HEARTBEAT_OK — better to over-report than to miss something.
-- Keep CONTENT concise but actionable.
-
-## Examples
-
-If nothing to report:
-STATUS: HEARTBEAT_OK
-REASON: All systems normal, no alerts or notable changes.
-
-If you want to send a message:
-STATUS: CHAT_YES
-REASON: Significant price movement detected.
-CONTENT: BTC just dropped 8% in the last hour — now at $87,200. This may trigger stop-losses.`,
+In short:
+- silence = nothing pushed
+- \`notify_user("...")\` = a push lands in the user's inbox`,
   activeHours: null,
 }
 
@@ -81,10 +72,12 @@ CONTENT: BTC just dropped 8% in the last hour — now at $87,200. This may trigg
 
 export interface HeartbeatOpts {
   config: HeartbeatConfig
-  connectorCenter: ConnectorCenter
-  cronEngine: CronEngine
-  agentCenter: AgentCenter
-  /** Registry to auto-register the heartbeat listener with. */
+  /** Where to register the heartbeat source config so the agent-work
+   *  pipeline knows how to handle heartbeat-sourced requests. */
+  agentWorkListener: AgentWorkListener
+  /** Listener registry — used to declare the heartbeat producer so its
+   *  agent.work.{requested,skip} emits are validated + show in the
+   *  topology graph. */
   registry: ListenerRegistry
   /** Optional: inject a session for testing. */
   session?: SessionStore
@@ -95,236 +88,123 @@ export interface HeartbeatOpts {
 export interface Heartbeat {
   start(): Promise<void>
   stop(): void
-  /** Hot-toggle heartbeat on/off (persists to config + updates cron job). */
+  /** Hot-toggle heartbeat on/off (persists to config + updates pump). */
   setEnabled(enabled: boolean): Promise<void>
   /** Current enabled state. */
   isEnabled(): boolean
-  /** Expose the raw listener for direct testing. */
-  readonly listener: Listener<'cron.fire', HeartbeatEmits>
+  /** Manually trigger a heartbeat tick — used by tests and "run now" UI. */
+  runNow(): Promise<void>
 }
 
 // ==================== Factory ====================
 
 export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
-  const { config, connectorCenter, cronEngine, agentCenter, registry } = opts
+  const { config, agentWorkListener, registry } = opts
   const session = opts.session ?? new SessionStore('heartbeat')
   const now = opts.now ?? Date.now
 
-  let jobId: string | null = null
-  let processing = false
   let enabled = config.enabled
-  let registered = false
+  let started = false
+  let producer: ProducerHandle<readonly ['agent.work.requested', 'agent.work.skip']> | null = null
+  let pump: Pump | null = null
 
   const dedup = new HeartbeatDedup()
 
-  async function handleFire(
-    entry: EventLogEntry<CronFirePayload>,
-    ctx: ListenerContext<HeartbeatEmits>,
-  ): Promise<void> {
-    const payload = entry.payload
+  // ---- Source config (registered with agent-work-listener) ----
+  //
+  // Output-side semantics (notify_user inspection + dedup gate) live
+  // here, closing over the dedup instance heartbeat owns. The
+  // agent-work-listener calls these when an agent.work.requested event
+  // with source='heartbeat' arrives.
+  const sourceConfig: AgentWorkSourceConfig = {
+    source: 'heartbeat',
+    session,
+    preamble: () =>
+      'You are operating in the heartbeat monitoring context (session: heartbeat). The following is the recent heartbeat conversation history.',
+    outputGate: (probe: AgentWorkResultProbe) => {
+      const call = probe.toolCalls.find((c) => c.name === 'notify_user')
+      if (!call) {
+        return { kind: 'skip', reason: 'ack', payload: { reason: 'ack' } }
+      }
+      const text = ((call.input ?? {}) as { text?: string }).text ?? ''
+      if (!text.trim()) {
+        return { kind: 'skip', reason: 'empty', payload: { reason: 'empty' } }
+      }
+      if (dedup.isDuplicate(text, now())) {
+        return {
+          kind: 'skip',
+          reason: 'duplicate',
+          payload: { reason: 'duplicate', parsedReason: text.slice(0, 80) },
+        }
+      }
+      return { kind: 'deliver', text, media: probe.media }
+    },
+    onDelivered: (text) => dedup.record(text, now()),
+  }
 
-    // Only handle our own job
-    if (payload.jobName !== HEARTBEAT_JOB_NAME) return
-
-    // Guard: skip if already processing
-    if (processing) return
-
-    processing = true
+  /** The pump's tick callback — active-hours guard then emit. */
+  async function onTick(): Promise<void> {
     const startMs = now()
     console.log(`heartbeat: firing at ${new Date(startMs).toISOString()}`)
 
-    try {
-      // 1. Active hours guard
-      if (!isWithinActiveHours(config.activeHours, now())) {
-        console.log('heartbeat: skipped (outside active hours)')
-        await ctx.emit('heartbeat.skip', { reason: 'outside-active-hours' })
-        return
-      }
-
-      // 2. Call AI
-      const result = await agentCenter.askWithSession(payload.payload, session, {
-        historyPreamble: 'You are operating in the heartbeat monitoring context (session: heartbeat). The following is the recent heartbeat conversation history.',
+    if (!isWithinActiveHours(config.activeHours, now())) {
+      await producer!.emit('agent.work.skip', {
+        source: 'heartbeat',
+        reason: 'outside-active-hours',
       })
-      const durationMs = now() - startMs
-
-      // 3. Parse structured response
-      const parsed = parseHeartbeatResponse(result.text)
-
-      if (parsed.status === 'HEARTBEAT_OK') {
-        console.log(`heartbeat: HEARTBEAT_OK — ${parsed.reason || 'no reason'} (${durationMs}ms)`)
-        await ctx.emit('heartbeat.skip', {
-          reason: 'ack',
-          parsedReason: parsed.reason,
-        })
-        return
-      }
-
-      // CHAT_YES (or unparsed fallback)
-      const text = parsed.content || result.text
-      if (!text.trim()) {
-        console.log(`heartbeat: skipped (empty content) (${durationMs}ms)`)
-        await ctx.emit('heartbeat.skip', { reason: 'empty' })
-        return
-      }
-
-      // 4. Dedup
-      if (dedup.isDuplicate(text, now())) {
-        console.log(`heartbeat: skipped (duplicate) (${durationMs}ms)`)
-        await ctx.emit('heartbeat.skip', { reason: 'duplicate' })
-        return
-      }
-
-      // 5. Append to notifications store. Connectors (Web bell, Telegram
-      //    inline, …) subscribe to the store's onAppended event and
-      //    surface the notification however suits their transport.
-      let appended = false
-      try {
-        await connectorCenter.notify(text, {
-          media: result.media,
-          source: 'heartbeat',
-        })
-        appended = true
-        // Record dedup unconditionally on append: the notification exists
-        // in the canonical record, even if a particular connector chose
-        // not to surface it (e.g. Telegram skipping when user is inactive).
-        dedup.record(text, now())
-      } catch (sendErr) {
-        console.warn('heartbeat: notify failed:', sendErr)
-      }
-
-      console.log(`heartbeat: CHAT_YES — appended=${appended} (${durationMs}ms)`)
-
-      // 6. Done event
-      await ctx.emit('heartbeat.done', {
-        reply: text,
-        reason: parsed.reason,
-        durationMs,
-        delivered: appended,
-      })
-    } catch (err) {
-      console.error('heartbeat: error:', err)
-      await ctx.emit('heartbeat.error', {
-        error: err instanceof Error ? err.message : String(err),
-        durationMs: now() - startMs,
-      })
-    } finally {
-      processing = false
-    }
-  }
-
-  const listener: Listener<'cron.fire', HeartbeatEmits> = {
-    name: 'heartbeat',
-    subscribes: 'cron.fire',
-    emits: HEARTBEAT_EMITS,
-    handle: handleFire,
-  }
-
-  /** Ensure the cron job exists and listener is registered (idempotent). */
-  async function ensureJobAndListener(): Promise<void> {
-    // Idempotent: find existing heartbeat job or create one
-    const existing = cronEngine.list().find((j) => j.name === HEARTBEAT_JOB_NAME)
-    if (existing) {
-      jobId = existing.id
-      await cronEngine.update(existing.id, {
-        schedule: { kind: 'every', every: config.every },
-        payload: config.prompt,
-        enabled,
-      })
-    } else {
-      jobId = await cronEngine.add({
-        name: HEARTBEAT_JOB_NAME,
-        schedule: { kind: 'every', every: config.every },
-        payload: config.prompt,
-        enabled,
-      })
+      console.log(`heartbeat: skipped (outside-active-hours)`)
+      return
     }
 
-    // Register listener exactly once
-    if (!registered) {
-      registry.register(listener)
-      registered = true
-    }
+    await producer!.emit('agent.work.requested', {
+      source: 'heartbeat',
+      prompt: config.prompt,
+    })
   }
 
   return {
-    listener,
     async start() {
-      // Always register job + listener (even if disabled) so setEnabled can toggle later
-      await ensureJobAndListener()
+      if (started) return
+      started = true
+
+      producer = registry.declareProducer({
+        name: 'heartbeat',
+        emits: ['agent.work.requested', 'agent.work.skip'] as const,
+      })
+      agentWorkListener.registerSource(sourceConfig)
+
+      pump = createPump({
+        name: 'heartbeat',
+        every: config.every,
+        enabled,
+        onTick,
+      })
+      pump.start()
     },
 
     stop() {
-      // Unregister the listener so a subsequent start() re-registers cleanly.
-      // Don't delete the cron job — it persists for restart recovery.
-      if (registered) {
-        registry.unregister(listener.name)
-        registered = false
-      }
+      if (!started) return
+      pump?.stop()
+      pump = null
+      producer?.dispose()
+      producer = null
+      started = false
     },
 
     async setEnabled(newEnabled: boolean) {
       enabled = newEnabled
-
-      // Ensure infrastructure exists (handles cold enable when start() was called with disabled)
-      await ensureJobAndListener()
-
-      // Persist to config file
+      pump?.setEnabled(newEnabled)
       await writeConfigSection('heartbeat', { ...config, enabled: newEnabled })
     },
 
     isEnabled() {
       return enabled
     },
+
+    async runNow() {
+      if (pump) await pump.runNow()
+    },
   }
-}
-
-// ==================== Response Parser ====================
-
-export type HeartbeatStatus = 'HEARTBEAT_OK' | 'CHAT_YES'
-
-export interface ParsedHeartbeatResponse {
-  status: HeartbeatStatus
-  reason: string
-  content: string
-  /** True when the raw response couldn't be parsed into the structured format. */
-  unparsed: boolean
-}
-
-/**
- * Parse a structured heartbeat response from the AI.
- *
- * Expected format:
- *   STATUS: HEARTBEAT_OK | CHAT_YES
- *   REASON: <text>
- *   CONTENT: <text>       (only for CHAT_YES)
- *
- * If the response doesn't match the expected format, treats the entire
- * raw text as a CHAT_YES message (fail-open: deliver rather than swallow).
- */
-export function parseHeartbeatResponse(raw: string): ParsedHeartbeatResponse {
-  const trimmed = raw.trim()
-  if (!trimmed) {
-    return { status: 'HEARTBEAT_OK', reason: 'empty response', content: '', unparsed: false }
-  }
-
-  // Extract STATUS field (case-insensitive, allows leading whitespace on the line)
-  const statusMatch = /^\s*STATUS:\s*(HEARTBEAT_OK|CHAT_YES)\s*$/im.exec(trimmed)
-  if (!statusMatch) {
-    // Fail-open: can't parse → treat as a message to deliver
-    return { status: 'CHAT_YES', reason: 'unparsed response', content: trimmed, unparsed: true }
-  }
-
-  const status = statusMatch[1].toUpperCase() as HeartbeatStatus
-
-  // Extract REASON field (everything after "REASON:" until next field or end)
-  const reasonMatch = /^\s*REASON:\s*(.+?)(?=\n\s*(?:STATUS|CONTENT):|\s*$)/ims.exec(trimmed)
-  const reason = reasonMatch?.[1]?.trim() ?? ''
-
-  // Extract CONTENT field (everything after "CONTENT:" to end)
-  const contentMatch = /^\s*CONTENT:\s*(.+)/ims.exec(trimmed)
-  const content = contentMatch?.[1]?.trim() ?? ''
-
-  return { status, reason, content, unparsed: false }
 }
 
 // ==================== Active Hours ====================
@@ -347,12 +227,9 @@ export function isWithinActiveHours(
 
   const nowMinutes = currentMinutesInTimezone(timezone, nowMs)
 
-  // Normal range (e.g. 09:00 → 22:00)
   if (startMinutes <= endMinutes) {
     return nowMinutes >= startMinutes && nowMinutes < endMinutes
   }
-
-  // Overnight range (e.g. 22:00 → 06:00)
   return nowMinutes >= startMinutes || nowMinutes < endMinutes
 }
 
@@ -367,11 +244,9 @@ function parseHHMM(s: string): number | null {
 
 function currentMinutesInTimezone(tz: string, nowMs?: number): number {
   const date = nowMs ? new Date(nowMs) : new Date()
-
   if (tz === 'local') {
     return date.getHours() * 60 + date.getMinutes()
   }
-
   try {
     const fmt = new Intl.DateTimeFormat('en-US', {
       timeZone: tz,
@@ -391,10 +266,14 @@ function currentMinutesInTimezone(tz: string, nowMs?: number): number {
 // ==================== Dedup ====================
 
 /**
- * Suppress identical heartbeat messages within a time window (default 24h).
+ * Suppress identical heartbeat notify_user texts within a time window
+ * (default 24h). In-memory only — restart loses dedup state. Acceptable
+ * trade-off: heartbeats are coarse-grained (~30m), restart-window
+ * collisions are rare, single-duplicate cost is low.
  */
 export class HeartbeatDedup {
-  private lastText: string | null = null
+  /** Public for callers that want to inspect the last-delivered text. */
+  public lastText: string | null = null
   private lastSentAt = 0
   private windowMs: number
 

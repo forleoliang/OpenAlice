@@ -77,3 +77,42 @@ export function pnlOf(input: PositionMathInput): string {
   const sideSign = input.side === 'long' ? 1 : -1
   return qty.mul(mark.minus(avg)).mul(mult).mul(sideSign).toString()
 }
+
+// ==================== Account aggregation ====================
+
+export interface AggregateInput {
+  side: 'long' | 'short'
+  marketValue: Decimal | string | number
+}
+
+export interface AggregateOutput {
+  /** cash + Σ(marketValue × side_sign). */
+  netLiquidation: Decimal
+  /** Σ(marketValue × side_sign). Signed: positive for net-long books, negative for net-short. */
+  totalMarketValue: Decimal
+}
+
+/**
+ * Compute account equity from cash + per-position marketValues.
+ *
+ * The `Position.marketValue` convention in this codebase is always-positive
+ * (notional), with side carried separately. Naively summing those into
+ * netLiquidation double-counts short positions: a SELL-to-open short adds
+ * its premium to cash AND its marketValue gets added on top, leaving netLiq
+ * inflated by 2 × |short marketValue|. This helper applies side sign during
+ * aggregation so short positions correctly subtract their notional from
+ * equity. Use it everywhere a broker's getAccount() builds netLiq from
+ * positions instead of reading an upstream-reported equity field.
+ */
+export function aggregateAccountFromPositions(
+  cash: Decimal | string | number,
+  positions: Iterable<AggregateInput>,
+): AggregateOutput {
+  const cashDec = toDecimal(cash)
+  let total = new Decimal(0)
+  for (const p of positions) {
+    const mv = toDecimal(p.marketValue)
+    total = total.plus(p.side === 'short' ? mv.neg() : mv)
+  }
+  return { netLiquidation: cashDec.plus(total), totalMarketValue: total }
+}

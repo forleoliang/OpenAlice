@@ -1,37 +1,32 @@
 /**
- * Cron Listener — subscribes to `cron.fire` events from the EventLog
- * and routes them through the AgentCenter for processing.
+ * Cron Listener — translates user-defined cron job fires into
+ * canonical `agent.work.requested` events. The agent-work-listener
+ * picks them up and runs the AI dispatch pipeline.
  *
- * Flow:
- *   eventLog 'cron.fire' → agentCenter.askWithSession(payload, session)
- *                         → connectorCenter.notify(reply)
- *                         → ctx.emit 'cron.done' / 'cron.error'
+ * Serial-execution lock so concurrent fires don't overlap. No
+ * notification policy lives here — every successful cron reply is
+ * pushed (the AgentWork default). Cron jobs that want
+ * AI-decides-to-notify semantics can teach their prompt about
+ * `notify_user`; the source config registered here doesn't reference
+ * any output gate, so the default deliver-result.text behaviour wins.
  *
- * The listener owns a dedicated SessionStore for cron conversations,
- * independent of user chat sessions (Telegram, Web, etc.).
+ * Internal jobs (heartbeat / snapshot) no longer live in the cron
+ * engine — they each own their own Pump now. So there's no
+ * `__*__` filter needed in this listener anymore.
  */
 
 import type { EventLogEntry } from '../../core/event-log.js'
 import type { CronFirePayload } from '../../core/agent-event.js'
-import type { AgentCenter } from '../../core/agent-center.js'
 import { SessionStore } from '../../core/session.js'
-import type { ConnectorCenter } from '../../core/connector-center.js'
 import type { Listener, ListenerContext } from '../../core/listener.js'
 import type { ListenerRegistry } from '../../core/listener-registry.js'
+import type { AgentWorkListener, AgentWorkSourceConfig } from '../../core/agent-work-listener.js'
 
-/** Internal jobs (prefixed with __) have dedicated handlers and should not be routed to the AI. */
-function isInternalJob(name: string): boolean {
-  return name.startsWith('__') && name.endsWith('__')
-}
-
-// ==================== Types ====================
-
-const CRON_EMITS = ['cron.done', 'cron.error'] as const
+const CRON_EMITS = ['agent.work.requested'] as const
 type CronEmits = typeof CRON_EMITS
 
 export interface CronListenerOpts {
-  connectorCenter: ConnectorCenter
-  agentCenter: AgentCenter
+  agentWorkListener: AgentWorkListener
   /** Registry to auto-register this listener with. */
   registry: ListenerRegistry
   /** Optional: inject a session for testing. Otherwise creates a dedicated cron session. */
@@ -39,22 +34,36 @@ export interface CronListenerOpts {
 }
 
 export interface CronListener {
-  /** Register the listener with the registry (idempotent). */
   start(): Promise<void>
-  /** Unregister the listener from the registry. */
   stop(): void
-  /** Expose the raw Listener object (for testing `handle()` directly). */
   readonly listener: Listener<'cron.fire', CronEmits>
 }
 
-// ==================== Factory ====================
-
 export function createCronListener(opts: CronListenerOpts): CronListener {
-  const { connectorCenter, agentCenter, registry } = opts
+  const { agentWorkListener, registry } = opts
   const session = opts.session ?? new SessionStore('cron/default')
 
   let processing = false
   let registered = false
+
+  const sourceConfig: AgentWorkSourceConfig = {
+    source: 'cron',
+    session,
+    preamble: (metadata) => {
+      const jobName = (metadata as { jobName?: string } | undefined)?.jobName
+      return `You are operating in the cron job context (session: cron/default${jobName ? `, job: ${jobName}` : ''}). This is an automated cron job execution.`
+    },
+    // No output gate — every successful reply is pushed (default
+    // AgentWork behaviour matches today's cron semantics).
+    buildDoneMetadata: (req) => {
+      const m = req.metadata as { jobId?: string; jobName?: string }
+      return { jobId: m.jobId, jobName: m.jobName }
+    },
+    buildErrorMetadata: (req) => {
+      const m = req.metadata as { jobId?: string; jobName?: string }
+      return { jobId: m.jobId, jobName: m.jobName }
+    },
+  }
 
   const listener: Listener<'cron.fire', CronEmits> = {
     name: 'cron-router',
@@ -66,49 +75,17 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     ): Promise<void> {
       const payload = entry.payload
 
-      // Guard: internal jobs (__heartbeat__, __snapshot__, etc.) have dedicated handlers
-      if (isInternalJob(payload.jobName)) return
-
-      // Guard: skip if already processing (serial execution)
       if (processing) {
         console.warn(`cron-listener: skipping job ${payload.jobId} (already processing)`)
         return
       }
 
       processing = true
-      const startMs = Date.now()
-
       try {
-        // Ask the AI engine with the cron payload
-        const result = await agentCenter.askWithSession(payload.payload, session, {
-          historyPreamble: `You are operating in the cron job context (session: cron/default, job: ${payload.jobName}). This is an automated cron job execution.`,
-        })
-
-        // Append to notifications store; connectors fan out via onAppended.
-        try {
-          await connectorCenter.notify(result.text, {
-            media: result.media,
-            source: 'cron',
-          })
-        } catch (sendErr) {
-          console.warn(`cron-listener: notify failed for job ${payload.jobId}:`, sendErr)
-        }
-
-        // Log success
-        await ctx.emit('cron.done', {
-          jobId: payload.jobId,
-          jobName: payload.jobName,
-          reply: result.text,
-          durationMs: Date.now() - startMs,
-        })
-      } catch (err) {
-        console.error(`cron-listener: error processing job ${payload.jobId}:`, err)
-
-        await ctx.emit('cron.error', {
-          jobId: payload.jobId,
-          jobName: payload.jobName,
-          error: err instanceof Error ? err.message : String(err),
-          durationMs: Date.now() - startMs,
+        await ctx.emit('agent.work.requested', {
+          source: 'cron',
+          prompt: payload.payload,
+          metadata: { jobId: payload.jobId, jobName: payload.jobName },
         })
       } finally {
         processing = false
@@ -121,6 +98,7 @@ export function createCronListener(opts: CronListenerOpts): CronListener {
     async start() {
       if (registered) return
       registry.register(listener)
+      agentWorkListener.registerSource(sourceConfig)
       registered = true
     },
     stop() {

@@ -36,6 +36,7 @@ import {
   type TpSlParams,
 } from '../types.js'
 import '../../contract-ext.js'
+import { aggregateAccountFromPositions } from '../../position-math.js'
 import { RequestBridge } from './request-bridge.js'
 import { resolveSymbol } from './ibkr-contracts.js'
 import type { IbkrBrokerConfig } from './ibkr-types.js'
@@ -267,15 +268,13 @@ export class IbkrBroker implements IBroker {
     if (!download) throw new BrokerError('NETWORK', 'Account data not yet available')
 
     const totalCashValue = new Decimal(download.values.get('TotalCashValue') ?? '0')
-    let totalMarketValue = new Decimal(0)
     let positionUnrealizedPnL = new Decimal(0)
     for (const pos of download.positions) {
-      totalMarketValue = totalMarketValue.plus(pos.marketValue)
       positionUnrealizedPnL = positionUnrealizedPnL.plus(pos.unrealizedPnL)
     }
 
     const netLiquidation = download.positions.length > 0
-      ? totalCashValue.plus(totalMarketValue)
+      ? aggregateAccountFromPositions(totalCashValue, download.positions).netLiquidation
       : new Decimal(download.values.get('NetLiquidation') ?? '0')
 
     const unrealizedPnL = download.positions.length > 0

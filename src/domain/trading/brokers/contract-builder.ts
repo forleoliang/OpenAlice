@@ -107,6 +107,22 @@ export function buildPosition(input: BuildPositionInput): Position {
   const multiplier = input.multiplier
     ?? (input.contract.multiplier ? input.contract.multiplier : '1')
 
+  // OPT/FOP positions with multiplier=1 are virtually always an upstream
+  // decode bug — every real US equity option / futures option has a
+  // contract multiplier > 1 (typically 100). A passing '1' here means the
+  // broker either failed to fetch the multiplier or dropped it during
+  // normalization; downstream marketValue / unrealizedPnL will be wrong
+  // by ~100x. Refuse to construct the Position rather than ship a silent
+  // 100x-underreported number.
+  if ((input.contract.secType === 'OPT' || input.contract.secType === 'FOP')
+      && (multiplier === '1' || multiplier === '')) {
+    throw new Error(
+      `buildPosition: ${input.contract.secType} ${input.contract.symbol ?? '?'} ` +
+      `has multiplier='${multiplier}' — upstream broker decode is missing the contract ` +
+      `multiplier. Position values would be off by ~100x.`,
+    )
+  }
+
   // Either pass-through or derive — never both.
   let marketValue: string
   let unrealizedPnL: string

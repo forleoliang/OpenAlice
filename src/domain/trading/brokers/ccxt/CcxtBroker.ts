@@ -25,6 +25,7 @@ import {
   type TpSlParams,
 } from '../types.js'
 import '../../contract-ext.js'
+import { aggregateAccountFromPositions } from '../../position-math.js'
 import { buildPosition } from '../contract-builder.js'
 import { CCXT_CREDENTIAL_FIELDS, type CcxtBrokerConfig, type CcxtMarket, type FundingRate, type OrderBook, type OrderBookLevel } from './ccxt-types.js'
 import { MAX_INIT_RETRIES, INIT_RETRY_BASE_MS } from './ccxt-types.js'
@@ -226,34 +227,51 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       // Use the exchange's own default types (set in its CCXT class describe()).
       // Skip 'option' type — option markets are typically thousands of contracts
       // (Bybit alone has ~10k+) and rarely useful for automated trading.
-      const allTypes = (fmOpts['types'] ?? []) as string[]
+      const originalTypes = fmOpts['types']
+      const allTypes = (originalTypes ?? []) as string[]
       const types = allTypes.length > 0
         ? allTypes.filter(t => t !== 'option')
         : ['spot', 'linear', 'inverse'] // fallback for exchanges that don't declare types
 
-      const allMarkets: unknown[] = []
-      for (const type of types) {
-        for (let attempt = 1; attempt <= MAX_INIT_RETRIES; attempt++) {
-          try {
-            const prevTypes = fmOpts['types']
-            fmOpts['types'] = [type]
-            const markets = await origFetchMarkets(params)
-            fmOpts['types'] = prevTypes
-            allMarkets.push(...markets)
-            break
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err)
-            if (attempt < MAX_INIT_RETRIES) {
-              const delay = INIT_RETRY_BASE_MS * Math.pow(2, attempt - 1)
-              console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) attempt ${attempt}/${MAX_INIT_RETRIES} failed, retrying in ${delay}ms...`)
-              await new Promise(r => setTimeout(r, delay))
-            } else {
-              console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) failed after ${MAX_INIT_RETRIES} attempts: ${msg} — skipping`)
+      try {
+        const allMarkets: unknown[] = []
+        for (const type of types) {
+          let lastErr: unknown
+          let success = false
+          for (let attempt = 1; attempt <= MAX_INIT_RETRIES; attempt++) {
+            try {
+              fmOpts['types'] = [type]
+              const markets = await origFetchMarkets(params)
+              allMarkets.push(...markets)
+              success = true
+              break
+            } catch (err) {
+              lastErr = err
+              if (attempt < MAX_INIT_RETRIES) {
+                const delay = INIT_RETRY_BASE_MS * Math.pow(2, attempt - 1)
+                const msg = err instanceof Error ? err.message : String(err)
+                console.warn(`CcxtBroker[${accountId}]: fetchMarkets(${type}) attempt ${attempt}/${MAX_INIT_RETRIES} failed, retrying in ${delay}ms... (${msg.slice(0, 160)})`)
+                await new Promise(r => setTimeout(r, delay))
+              }
             }
           }
+          if (!success) {
+            // A CCXT account is a full-spectrum interface — every market type
+            // the exchange supports must load, or the broker refuses to come
+            // up. Silently dropping a type (e.g. spot) would understate
+            // netLiquidation and hide real holdings, producing wrong snapshots
+            // forever until process restart. Whether the user actively trades
+            // that type is their decision, not ours.
+            const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+            throw new Error(
+              `CcxtBroker[${accountId}]: fetchMarkets(${type}) failed after ${MAX_INIT_RETRIES} attempts: ${msg}`,
+            )
+          }
         }
+        return allMarkets as Awaited<ReturnType<Exchange['fetchMarkets']>>
+      } finally {
+        fmOpts['types'] = originalTypes
       }
-      return allMarkets as Awaited<ReturnType<Exchange['fetchMarkets']>>
     }
 
     try {
@@ -682,7 +700,7 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       // snapshot that may not update between funding/settlement cycles).
       let unrealizedPnL = new Decimal(0)
       let realizedPnL = new Decimal(0)
-      let totalPositionValue = new Decimal(0)
+      const aggregateInputs: Array<{ side: 'long' | 'short'; marketValue: string }> = []
       for (const p of rawPositions) {
         unrealizedPnL = unrealizedPnL.plus(new Decimal(String(p.unrealizedPnl ?? 0)))
         realizedPnL = realizedPnL.plus(new Decimal(String((p as unknown as Record<string, unknown>).realizedPnl ?? 0)))
@@ -691,7 +709,8 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
         const contractSize = new Decimal(String(p.contractSize ?? 1))
         const quantity = contracts.mul(contractSize)
         const markPrice = new Decimal(String(p.markPrice ?? 0))
-        totalPositionValue = totalPositionValue.plus(quantity.mul(markPrice))
+        const side: 'long' | 'short' = p.side === 'short' ? 'short' : 'long'
+        aggregateInputs.push({ side, marketValue: quantity.mul(markPrice).toString() })
       }
 
       // Fold spot holdings (BTC/ETH/etc balances) into position value.
@@ -699,10 +718,10 @@ export class CcxtBroker implements IBroker<CcxtBrokerMeta> {
       // an asset — so they count toward netLiquidation, not totalCashValue.
       const spotHoldings = await this.fetchSpotHoldings(balance)
       for (const sp of spotHoldings) {
-        totalPositionValue = totalPositionValue.plus(new Decimal(sp.marketValue))
+        aggregateInputs.push({ side: 'long', marketValue: sp.marketValue })
       }
 
-      const netLiquidation = free.plus(totalPositionValue)
+      const { netLiquidation } = aggregateAccountFromPositions(free, aggregateInputs)
 
       return {
         baseCurrency: 'USD',

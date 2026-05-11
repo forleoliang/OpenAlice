@@ -16,42 +16,12 @@
 
 import { Type, type TSchema } from '@sinclair/typebox'
 import AjvPkg from 'ajv'
+import type { NotificationSource } from './notifications-store.js'
 
 // Re-export CronFirePayload from its canonical location
 export type { CronFirePayload } from '../task/cron/engine.js'
 
 // ==================== Payload Interfaces ====================
-
-export interface CronDonePayload {
-  jobId: string
-  jobName: string
-  reply: string
-  durationMs: number
-}
-
-export interface CronErrorPayload {
-  jobId: string
-  jobName: string
-  error: string
-  durationMs: number
-}
-
-export interface HeartbeatDonePayload {
-  reply: string
-  reason: string
-  durationMs: number
-  delivered: boolean
-}
-
-export interface HeartbeatSkipPayload {
-  reason: string
-  parsedReason?: string
-}
-
-export interface HeartbeatErrorPayload {
-  error: string
-  durationMs: number
-}
 
 export interface MessageReceivedPayload {
   channel: string
@@ -67,20 +37,49 @@ export interface MessageSentPayload {
   durationMs: number
 }
 
-export interface TaskRequestedPayload {
+// ==================== Canonical AgentWork events ====================
+//
+// All "Alice runs an async task" flows funnel through these four
+// canonical events instead of per-trigger-source event types. The
+// `source` field on each payload is the routing key — consumers
+// filter on it instead of subscribing to separate event types.
+//
+// `agent.work.requested` is externally-ingestable (webhook). The
+// done/skip/error events are internal-only.
+
+export interface AgentWorkRequestedPayload {
+  /** Which trigger source produced this work request. Drives the
+   *  agent-work-listener's source-registry lookup. */
+  source: NotificationSource
+  /** The AI prompt to execute. */
   prompt: string
+  /** Trigger-specific metadata, surfaced back on the canonical
+   *  done/skip/error events via per-source payload builders. */
+  metadata?: Record<string, unknown>
 }
 
-export interface TaskDonePayload {
-  prompt: string
+export interface AgentWorkDonePayload {
+  source: NotificationSource
   reply: string
   durationMs: number
+  /** Did the notification actually reach the connector? */
+  delivered: boolean
+  metadata?: Record<string, unknown>
 }
 
-export interface TaskErrorPayload {
-  prompt: string
+export interface AgentWorkSkipPayload {
+  source: NotificationSource
+  /** Free-form reason — e.g. 'ack' | 'duplicate' | 'empty' |
+   *  'outside-active-hours' | per-source extension. */
+  reason: string
+  metadata?: Record<string, unknown>
+}
+
+export interface AgentWorkErrorPayload {
+  source: NotificationSource
   error: string
   durationMs: number
+  metadata?: Record<string, unknown>
 }
 
 // ==================== Event Map ====================
@@ -90,16 +89,12 @@ import type { CronFirePayload } from '../task/cron/engine.js'
 
 export interface AgentEventMap {
   'cron.fire': CronFirePayload
-  'cron.done': CronDonePayload
-  'cron.error': CronErrorPayload
-  'heartbeat.done': HeartbeatDonePayload
-  'heartbeat.skip': HeartbeatSkipPayload
-  'heartbeat.error': HeartbeatErrorPayload
   'message.received': MessageReceivedPayload
   'message.sent': MessageSentPayload
-  'task.requested': TaskRequestedPayload
-  'task.done': TaskDonePayload
-  'task.error': TaskErrorPayload
+  'agent.work.requested': AgentWorkRequestedPayload
+  'agent.work.done':      AgentWorkDonePayload
+  'agent.work.skip':      AgentWorkSkipPayload
+  'agent.work.error':     AgentWorkErrorPayload
 }
 
 // ==================== TypeBox Schemas ====================
@@ -108,37 +103,6 @@ const CronFireSchema = Type.Object({
   jobId: Type.String(),
   jobName: Type.String(),
   payload: Type.String(),
-})
-
-const CronDoneSchema = Type.Object({
-  jobId: Type.String(),
-  jobName: Type.String(),
-  reply: Type.String(),
-  durationMs: Type.Number(),
-})
-
-const CronErrorSchema = Type.Object({
-  jobId: Type.String(),
-  jobName: Type.String(),
-  error: Type.String(),
-  durationMs: Type.Number(),
-})
-
-const HeartbeatDoneSchema = Type.Object({
-  reply: Type.String(),
-  reason: Type.String(),
-  durationMs: Type.Number(),
-  delivered: Type.Boolean(),
-})
-
-const HeartbeatSkipSchema = Type.Object({
-  reason: Type.String(),
-  parsedReason: Type.Optional(Type.String()),
-})
-
-const HeartbeatErrorSchema = Type.Object({
-  error: Type.String(),
-  durationMs: Type.Number(),
 })
 
 const MessageReceivedSchema = Type.Object({
@@ -155,20 +119,44 @@ const MessageSentSchema = Type.Object({
   durationMs: Type.Number(),
 })
 
-const TaskRequestedSchema = Type.Object({
+// ---- Canonical agent-work event schemas ----
+//
+// `source` is constrained to the NotificationSource union literal set.
+// Free-form `metadata` is `unknown` at validation time (downstream
+// shape decided per-source).
+
+const SourceUnion = Type.Union([
+  Type.Literal('heartbeat'),
+  Type.Literal('cron'),
+  Type.Literal('task'),
+  Type.Literal('manual'),
+])
+
+const AgentWorkRequestedSchema = Type.Object({
+  source: SourceUnion,
   prompt: Type.String(),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 })
 
-const TaskDoneSchema = Type.Object({
-  prompt: Type.String(),
+const AgentWorkDoneSchema = Type.Object({
+  source: SourceUnion,
   reply: Type.String(),
   durationMs: Type.Number(),
+  delivered: Type.Boolean(),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 })
 
-const TaskErrorSchema = Type.Object({
-  prompt: Type.String(),
+const AgentWorkSkipSchema = Type.Object({
+  source: SourceUnion,
+  reason: Type.String(),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+})
+
+const AgentWorkErrorSchema = Type.Object({
+  source: SourceUnion,
   error: Type.String(),
   durationMs: Type.Number(),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 })
 
 // ==================== AgentEvents — metadata registry ====================
@@ -190,26 +178,6 @@ export const AgentEvents: { [K in keyof AgentEventMap]: AgentEventMeta } = {
     schema: CronFireSchema,
     description: 'Cron scheduler timer fired for a registered job.',
   },
-  'cron.done': {
-    schema: CronDoneSchema,
-    description: 'Cron job was routed through the AI and completed successfully.',
-  },
-  'cron.error': {
-    schema: CronErrorSchema,
-    description: 'Cron job routing through the AI failed.',
-  },
-  'heartbeat.done': {
-    schema: HeartbeatDoneSchema,
-    description: 'Heartbeat produced content and (attempted to) deliver a notification.',
-  },
-  'heartbeat.skip': {
-    schema: HeartbeatSkipSchema,
-    description: 'Heartbeat fired but no notification was sent (HEARTBEAT_OK, duplicate, outside active hours, or empty).',
-  },
-  'heartbeat.error': {
-    schema: HeartbeatErrorSchema,
-    description: 'Heartbeat invocation errored.',
-  },
   'message.received': {
     schema: MessageReceivedSchema,
     description: 'A user message arrived on a connector (Web chat, Telegram, etc.).',
@@ -218,18 +186,22 @@ export const AgentEvents: { [K in keyof AgentEventMap]: AgentEventMeta } = {
     schema: MessageSentSchema,
     description: 'An assistant reply was dispatched on a connector.',
   },
-  'task.requested': {
-    schema: TaskRequestedSchema,
+  'agent.work.requested': {
+    schema: AgentWorkRequestedSchema,
     external: true,
-    description: 'External caller asked Alice to run a one-shot task with the given prompt. Ingestible via POST /api/events/ingest.',
+    description: 'Canonical request to dispatch an AgentWork task. Carries `source` (which trigger produced it) plus the AI prompt. Ingestible via POST /api/events/ingest; the webhook layer also accepts the legacy `task.requested` event type and translates it to this canonical form.',
   },
-  'task.done': {
-    schema: TaskDoneSchema,
-    description: 'A requested task completed and its reply was dispatched.',
+  'agent.work.done': {
+    schema: AgentWorkDoneSchema,
+    description: 'An AgentWork task completed and its reply was dispatched. Filter on payload.source to attribute to a specific trigger (heartbeat / cron / task).',
   },
-  'task.error': {
-    schema: TaskErrorSchema,
-    description: 'A requested task failed during execution.',
+  'agent.work.skip': {
+    schema: AgentWorkSkipSchema,
+    description: 'An AgentWork task was suppressed before delivery (dedup, empty content, outside active hours, AI declined to notify, …). Filter on payload.source for trigger attribution.',
+  },
+  'agent.work.error': {
+    schema: AgentWorkErrorSchema,
+    description: 'An AgentWork task failed during execution. Filter on payload.source for trigger attribution.',
   },
 }
 

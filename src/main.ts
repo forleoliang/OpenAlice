@@ -35,6 +35,8 @@ import { ConnectorCenter } from './core/connector-center.js'
 import { createNotificationsStore } from './core/notifications-store.js'
 import { ToolCenter } from './core/tool-center.js'
 import { AgentCenter } from './core/agent-center.js'
+import { AgentWorkRunner } from './core/agent-work.js'
+import { createNotifyUserTool } from './tool/notify-user.js'
 import { GenerateRouter } from './core/ai-provider-manager.js'
 import { VercelAIProvider } from './ai-providers/vercel-ai-sdk/vercel-provider.js'
 import { AgentSdkProvider } from './ai-providers/agent-sdk/agent-sdk-provider.js'
@@ -46,7 +48,7 @@ import { createEventBus } from './core/event-bus.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
 import { createHeartbeat } from './task/heartbeat/index.js'
 import { createMetricsListener } from './task/metrics/index.js'
-import { createTaskRouter } from './task/task-router/index.js'
+import { createAgentWorkListener } from './core/agent-work-listener.js'
 import { NewsCollectorStore, NewsCollector } from './domain/news/index.js'
 import { createNewsArchiveTools } from './tool/news.js'
 
@@ -244,6 +246,7 @@ async function main() {
   }
   toolCenter.register(createAnalysisTools(equityClient, cryptoClient, currencyClient, commodityClient), 'analysis')
   toolCenter.register(createEconomyTools(economyClient, commodityClient), 'economy')
+  toolCenter.register(createNotifyUserTool(), 'notify')
 
   console.log(`tool-center: ${toolCenter.list().length} tools registered`)
 
@@ -278,36 +281,79 @@ async function main() {
   // Session awareness tools (registered here because they need connectorCenter)
   toolCenter.register(createSessionTools(connectorCenter), 'session')
 
+  // ==================== AgentWork runner — shared by all autonomous trigger sources ====================
+
+  const agentWorkRunner = new AgentWorkRunner({ agentCenter, connectorCenter })
+
+  // ==================== AgentWork Listener (single dispatch point) ====================
+  //
+  // Owns all `agent.work.requested` traffic. Each trigger source
+  // (cron / heartbeat / webhook) registers its source config and
+  // emits the canonical event; the listener routes by source field
+  // and runs the AgentWork pipeline.
+
+  const agentWorkListener = createAgentWorkListener({
+    runner: agentWorkRunner,
+    registry: listenerRegistry,
+  })
+  await agentWorkListener.start()
+
+  // Register the `task` (webhook-triggered) source inline. Unlike
+  // heartbeat and cron, there's no listener-side wrapper — the
+  // webhook ingest endpoint emits agent.work.requested directly
+  // (or translates the legacy task.requested wire format).
+  const taskSession = new SessionStore('task/default')
+  await taskSession.restore()
+  agentWorkListener.registerSource({
+    source: 'task',
+    session: taskSession,
+    preamble: () =>
+      'You are handling an externally-triggered task (session: task/default). Follow the prompt and reply with what the caller needs.',
+    buildDoneMetadata: (req) => ({ prompt: req.prompt }),
+    buildErrorMetadata: (req) => ({ prompt: req.prompt }),
+  })
+
+  // ==================== One-time migration: clean orphan internal cron jobs ====================
+  //
+  // Prior to the Pump refactor, heartbeat and snapshot registered their
+  // schedules as internal cron jobs (__heartbeat__, __snapshot__) inside
+  // the cron engine. They now own private Pumps. Any pre-existing entries
+  // in data/cron/jobs.json are orphan disk state — clean them up so
+  // they don't show in the Automation > Cron UI and don't take up
+  // memory in cron-engine.
+  for (const job of cronEngine.list()) {
+    if (job.name.startsWith('__') && job.name.endsWith('__')) {
+      console.log(`cron: removing orphan internal job ${job.name} (${job.id})`)
+      await cronEngine.remove(job.id)
+    }
+  }
+
   // ==================== Cron Listener ====================
 
   const cronSession = new SessionStore('cron/default')
   await cronSession.restore()
-  const cronListener = createCronListener({ connectorCenter, agentCenter, registry: listenerRegistry, session: cronSession })
+  const cronListener = createCronListener({ agentWorkListener, registry: listenerRegistry, session: cronSession })
   await cronListener.start()
 
-  // ==================== Snapshot Scheduler ====================
+  // ==================== Snapshot Scheduler (Pump-driven) ====================
 
-  const snapshotScheduler = createSnapshotScheduler({ snapshotService, cronEngine, registry: listenerRegistry, config: config.snapshot })
+  const snapshotScheduler = createSnapshotScheduler({ snapshotService, config: config.snapshot })
   await snapshotScheduler.start()
   if (config.snapshot.enabled) {
     console.log(`snapshot: scheduler started (every ${config.snapshot.every})`)
   }
 
-  // ==================== Heartbeat ====================
+  // ==================== Heartbeat (Pump-driven) ====================
 
   const heartbeat = createHeartbeat({
     config: config.heartbeat,
-    connectorCenter, cronEngine, agentCenter, registry: listenerRegistry,
+    agentWorkListener, registry: listenerRegistry,
+    session: new SessionStore('heartbeat'),
   })
   await heartbeat.start()
   if (config.heartbeat.enabled) {
     console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
   }
-
-  // ==================== Task Router (external `task.requested` handler) ====================
-
-  const taskRouter = createTaskRouter({ connectorCenter, agentCenter, registry: listenerRegistry })
-  await taskRouter.start()
 
   // ==================== Event Metrics (wildcard observer) ====================
 

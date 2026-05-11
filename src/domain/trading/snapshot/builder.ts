@@ -6,6 +6,7 @@
  * Never fabricates zero-value placeholders.
  */
 
+import { UNSET_DOUBLE } from '@traderalice/ibkr'
 import type { UnifiedTradingAccount } from '../UnifiedTradingAccount.js'
 import type { UTASnapshot, SnapshotTrigger } from './types.js'
 
@@ -50,6 +51,11 @@ export async function buildSnapshot(
         marketValue: p.marketValue,
         unrealizedPnL: p.unrealizedPnL,
         realizedPnL: p.realizedPnL,
+        ...(p.contract.secType && { secType: p.contract.secType }),
+        ...(p.multiplier && p.multiplier !== '1' && { multiplier: p.multiplier }),
+        ...(p.contract.strike != null && p.contract.strike !== UNSET_DOUBLE && { strike: p.contract.strike }),
+        ...(p.contract.right && { right: p.contract.right }),
+        ...(p.contract.lastTradeDateOrContractMonth && { expiry: p.contract.lastTradeDateOrContractMonth }),
       })),
       openOrders: orders
         .filter(o => o.orderState.status === 'Submitted' || o.orderState.status === 'PreSubmitted')

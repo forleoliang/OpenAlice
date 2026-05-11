@@ -626,3 +626,85 @@ describe('multiplier discipline (regression)', () => {
     expect(positions[0].quantity.toNumber()).toBeCloseTo(0.01)
   })
 })
+
+// QA finding 2026-05-09: across all brokers that self-compute netLiq via
+// `cash + Σ(marketValue)` (Mock / IBKR / CCXT), a SELL-to-open short
+// double-counts the position. The premium received is added to cash, AND
+// the (unsigned) marketValue is added on top — leaving netLiq inflated by
+// 2 × |marketValue|. For OPT this is amplified by the 100x multiplier and
+// shows up as the "options direction is wrong" report from the community.
+describe('short positions — netLiquidation aggregation', () => {
+  it('short OPT (SELL to open) leaves netLiquidation flat at mark = entry', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 10_000 })
+    const optionKey = 'SPY-20260117-P-580'
+    acc.setMarkPrice(optionKey, '5.80')
+    acc.externalTrade({
+      nativeKey: optionKey,
+      side: 'SELL',
+      quantity: '1',
+      price: '5.80',
+      contract: {
+        symbol: 'SPY', secType: 'OPT', localSymbol: optionKey,
+        lastTradeDateOrContractMonth: '20260117', strike: 580, right: 'P',
+        multiplier: '100',
+      },
+    })
+
+    const account = await acc.getAccount()
+    // Premium received → cash = 10000 + 1×5.80×100 = 10580
+    expect(account.totalCashValue).toBe('10580')
+    // No PnL (mark unchanged from entry), so netLiq should equal the original equity.
+    // Pre-fix: getAccount returns 11160 (10580 + 580 mv added on top — short ignored).
+    expect(account.netLiquidation).toBe('10000')
+  })
+
+  it('short STK (SELL to open) leaves netLiquidation flat at mark = entry', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 10_000 })
+    acc.setMarkPrice('NVDA', '100')
+    acc.externalTrade({
+      nativeKey: 'NVDA',
+      side: 'SELL',
+      quantity: '50',
+      price: '100',
+      contract: { symbol: 'NVDA', secType: 'STK' },
+    })
+
+    const account = await acc.getAccount()
+    // Short proceeds → cash = 10000 + 50×100 = 15000
+    expect(account.totalCashValue).toBe('15000')
+    // Mark unchanged → netLiq unchanged at 10000.
+    expect(account.netLiquidation).toBe('10000')
+  })
+
+  it('mixed long + short — netLiquidation reflects net equity', async () => {
+    const acc = new MockBroker({ id: 'mock-paper', cash: 10_000 })
+
+    // Long 10 NVDA @ $50, mark @ $60 → +$100 unrealized PnL
+    acc.setMarkPrice('NVDA', '60')
+    acc.externalTrade({
+      nativeKey: 'NVDA',
+      side: 'BUY',
+      quantity: '10',
+      price: '50',
+      contract: { symbol: 'NVDA', secType: 'STK' },
+    })
+    // cash now = 10000 - 500 = 9500; long mv at mark = 600 → +100 PnL
+
+    // Short 5 TSLA @ $200, mark @ $180 → +$100 unrealized PnL (mark dropped, good for short)
+    acc.setMarkPrice('TSLA', '180')
+    acc.externalTrade({
+      nativeKey: 'TSLA',
+      side: 'SELL',
+      quantity: '5',
+      price: '200',
+      contract: { symbol: 'TSLA', secType: 'STK' },
+    })
+    // cash now = 9500 + 1000 = 10500; short notional at mark = 900 → +100 PnL
+
+    const account = await acc.getAccount()
+    // cash = 10500; long contributes +600, short contributes -900 → netLiq = 10500 + 600 - 900 = 10200
+    // Equivalently: starting equity 10000 + 100 (long PnL) + 100 (short PnL) = 10200
+    expect(account.netLiquidation).toBe('10200')
+    expect(account.unrealizedPnL).toBe('200')
+  })
+})

@@ -143,4 +143,63 @@ describe('buildPosition — pass-through vs derive', () => {
     })
     expect(p.avgCostSource).toBe('wallet')
   })
+
+  it('throws when OPT contract reaches buildPosition with multiplier=1 (upstream decode bug guard)', async () => {
+    // Simulates a broker callback path that constructs Contract directly
+    // (e.g. IBKR's request-bridge populates Contract from EWrapper args, not
+    // via buildContract+assertContract). If TWS misdecodes the option
+    // multiplier and the bridge passes through, buildPosition is the last
+    // line of defense before snapshot persists a 100x-undercount.
+    const { Contract } = await import('@traderalice/ibkr')
+    const rawContract = new Contract()
+    rawContract.symbol = 'AAPL'
+    rawContract.secType = 'OPT'
+    rawContract.lastTradeDateOrContractMonth = '20260720'
+    rawContract.strike = 150
+    rawContract.right = 'C'
+    // No multiplier on the raw Contract — exactly the upstream-decode-loss case.
+    expect(() => buildPosition({
+      contract: rawContract,
+      currency: 'USD',
+      side: 'long',
+      quantity: new Decimal(1),
+      avgCost: '5',
+      marketPrice: '5',
+      realizedPnL: '0',
+    })).toThrow(/multiplier='1'/)
+  })
+
+  it('throws when FOP contract reaches buildPosition with multiplier=1', async () => {
+    const { Contract } = await import('@traderalice/ibkr')
+    const rawContract = new Contract()
+    rawContract.symbol = 'ES'
+    rawContract.secType = 'FOP'
+    rawContract.lastTradeDateOrContractMonth = '20260620'
+    rawContract.strike = 5000
+    rawContract.right = 'P'
+    expect(() => buildPosition({
+      contract: rawContract,
+      currency: 'USD',
+      side: 'short',
+      quantity: new Decimal(1),
+      avgCost: '50',
+      marketPrice: '50',
+      realizedPnL: '0',
+    })).toThrow(/multiplier='1'/)
+  })
+
+  it('STK with multiplier=1 is allowed (canonical default)', () => {
+    const stkContract = buildContract({
+      symbol: 'AAPL', secType: 'STK', exchange: 'SMART', currency: 'USD',
+    })
+    expect(() => buildPosition({
+      contract: stkContract,
+      currency: 'USD',
+      side: 'long',
+      quantity: new Decimal(100),
+      avgCost: '150',
+      marketPrice: '160',
+      realizedPnL: '0',
+    })).not.toThrow()
+  })
 })

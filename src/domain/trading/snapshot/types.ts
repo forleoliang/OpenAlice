@@ -37,6 +37,16 @@ export interface UTASnapshot {
     marketValue: string
     unrealizedPnL: string
     realizedPnL: string
+    /** Contract metadata captured from the broker. Persisted so the UI can
+     *  re-render OPT/FUT/FOP positions (multiplier badge, strike, right,
+     *  expiry tag) without rehydrating the broker's contract registry —
+     *  the broker session that wrote the snapshot may not be running when
+     *  the snapshot is read back. */
+    secType?: string
+    multiplier?: string
+    strike?: number
+    right?: string
+    expiry?: string
   }>
 
   openOrders: Array<{

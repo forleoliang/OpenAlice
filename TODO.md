@@ -45,6 +45,23 @@ the item when done — git log is the history.
 
 ## Architecture
 
+- [ ] Broker raw-upstream recorder + no-connect replay harness (Layer 2
+      bug debug surface). When a community user reports a broker-specific
+      normalize bug — IBKR's `request-bridge.ts:470 .abs()`, the proto
+      decoder's empty `if (cp.secType !== undefined)` body, a hypothetical
+      CCXT `entryPrice` mis-parse — code-reading alone is slow and
+      imprecise. Add a dev-mode raw-upstream recorder per broker (IBKR:
+      EWrapper callback args; CCXT: `fetchBalance` / `fetchPositions`
+      return values; Alpaca: REST response bodies), append-only JSONL to
+      `data/trading/<id>/upstream/session-<timestamp>.jsonl`. Pair with a
+      replay tool that constructs the broker without network (currently
+      `init()` forces connect) and re-fires the recorded events through
+      the same normalize pipeline, returning `getPositions` /
+      `getAccount`. Prerequisite: factor `init()` to allow no-connect
+      construction for IBKR / CCXT / Alpaca. Lets future broker-bug
+      diagnosis happen offline against a recorded session instead of
+      requiring live broker re-attachment. Companion harness ideas in
+      `~/.claude/plans/simulator-moonlit-otter.md`.
 - [ ] Extract `derivePositionMath(raw): { marketValue, unrealizedPnL }`
       shared util. Today's IBroker contract requires every broker's
       `getPositions` to multiply by `multiplier` when computing

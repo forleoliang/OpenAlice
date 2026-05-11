@@ -41,7 +41,7 @@ export class WebPlugin implements Plugin {
   /** SSE clients grouped by channel ID. Default channel: 'default'. */
   private sseByChannel = new Map<string, Map<string, SSEClient>>()
   private unregisterConnector?: () => void
-  private ingestProducer?: ProducerHandle<readonly ['task.requested']>
+  private ingestProducer?: ProducerHandle<readonly ['agent.work.requested']>
 
   constructor(private config: WebConfig) {}
 
@@ -89,7 +89,7 @@ export class WebPlugin implements Plugin {
     // Extend this tuple when adding new `external: true` event types.
     this.ingestProducer = ctx.listenerRegistry.declareProducer({
       name: 'webhook-ingest',
-      emits: ['task.requested'] as const,
+      emits: ['agent.work.requested'] as const,
     })
 
     // ==================== Mount route modules ====================

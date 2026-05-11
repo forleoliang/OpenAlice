@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import Decimal from 'decimal.js'
-import { derivePositionMath, pnlOf, multiplierToDecimal } from './position-math.js'
+import { derivePositionMath, pnlOf, multiplierToDecimal, aggregateAccountFromPositions } from './position-math.js'
 
 describe('derivePositionMath', () => {
   it('STK long — multiplier=1: marketValue and PnL are simple products', () => {
@@ -85,5 +85,54 @@ describe('multiplierToDecimal', () => {
   })
   it('zero → 1 (zero is a "broker forgot to set" signal)', () => {
     expect(multiplierToDecimal('0').toNumber()).toBe(1)
+  })
+})
+
+describe('aggregateAccountFromPositions', () => {
+  it('cash only — no positions', () => {
+    const r = aggregateAccountFromPositions('10000', [])
+    expect(r.netLiquidation.toString()).toBe('10000')
+    expect(r.totalMarketValue.toString()).toBe('0')
+  })
+
+  it('long-only — netLiq = cash + Σ(marketValue)', () => {
+    const r = aggregateAccountFromPositions('5000', [
+      { side: 'long', marketValue: '1500' },
+      { side: 'long', marketValue: '2500' },
+    ])
+    expect(r.netLiquidation.toString()).toBe('9000')
+    expect(r.totalMarketValue.toString()).toBe('4000')
+  })
+
+  it('short-only — short marketValue subtracts (premium already in cash)', () => {
+    // Premium received from selling already lives in cash. The short's
+    // notional marketValue is a liability — subtract from equity.
+    const r = aggregateAccountFromPositions('10580', [
+      { side: 'short', marketValue: '580' },
+    ])
+    expect(r.netLiquidation.toString()).toBe('10000')
+    expect(r.totalMarketValue.toString()).toBe('-580')
+  })
+
+  it('mixed long + short', () => {
+    // cash 10500, long mv +600 (NVDA 10@60), short notional 900 (TSLA 5@180)
+    // → netLiq = 10500 + 600 - 900 = 10200
+    const r = aggregateAccountFromPositions('10500', [
+      { side: 'long', marketValue: '600' },
+      { side: 'short', marketValue: '900' },
+    ])
+    expect(r.netLiquidation.toString()).toBe('10200')
+    expect(r.totalMarketValue.toString()).toBe('-300')
+  })
+
+  it('accepts Decimal inputs equivalently to strings', () => {
+    const a = aggregateAccountFromPositions(new Decimal('1000'), [
+      { side: 'short', marketValue: new Decimal('200') },
+    ])
+    const b = aggregateAccountFromPositions('1000', [
+      { side: 'short', marketValue: '200' },
+    ])
+    expect(a.netLiquidation.toString()).toBe(b.netLiquidation.toString())
+    expect(a.totalMarketValue.toString()).toBe(b.totalMarketValue.toString())
   })
 })

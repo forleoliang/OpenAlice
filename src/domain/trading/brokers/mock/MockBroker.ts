@@ -31,7 +31,7 @@ import type {
   TpSlParams,
 } from '../types.js'
 import '../../contract-ext.js'
-import { derivePositionMath } from '../../position-math.js'
+import { derivePositionMath, aggregateAccountFromPositions } from '../../position-math.js'
 import { buildContract, buildPosition } from '../contract-builder.js'
 import type { SecType } from '../../contract-discipline.js'
 
@@ -376,7 +376,7 @@ export class MockBroker implements IBroker {
     if (this._accountOverride) return this._accountOverride
 
     let unrealizedPnL = new Decimal(0)
-    let marketValueAcc = new Decimal(0)
+    const aggregateInputs: Array<{ side: 'long' | 'short'; marketValue: string }> = []
     for (const pos of this._positions.values()) {
       const price = pos.marketPriceOverride ?? this._markPriceFor(pos.contract) ?? pos.avgCost
       const { marketValue, unrealizedPnL: pnl } = derivePositionMath({
@@ -386,13 +386,14 @@ export class MockBroker implements IBroker {
         multiplier: pos.contract.multiplier || '1',
         side: pos.side,
       })
-      marketValueAcc = marketValueAcc.plus(marketValue)
+      aggregateInputs.push({ side: pos.side, marketValue })
       unrealizedPnL = unrealizedPnL.plus(pnl)
     }
+    const { netLiquidation } = aggregateAccountFromPositions(this._cash, aggregateInputs)
 
     return {
       baseCurrency: 'USD',
-      netLiquidation: this._cash.plus(marketValueAcc).toString(),
+      netLiquidation: netLiquidation.toString(),
       totalCashValue: this._cash.toString(),
       unrealizedPnL: unrealizedPnL.toString(),
       realizedPnL: this._realizedPnL.toString(),
