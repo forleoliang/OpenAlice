@@ -1,42 +1,40 @@
 /**
- * Heartbeat — periodic AI self-check, built on top of the cron engine.
+ * Heartbeat — periodic Alice self-check.
  *
- * Registers a cron job (`__heartbeat__`) that fires at a configured
- * interval. Each fire is submitted to AgentWorkRunner with two gates:
+ * Today's shape: a trigger source for `agent.work.requested`. Owns
+ * the `__heartbeat__` cron job lifecycle, the active-hours config,
+ * and the in-memory dedup window. On each tick:
  *
- *   - **inputGate**: active-hours filter — skip without spending tokens
- *     when outside the configured window
- *   - **outputGate**: inspect AI's tool calls — if `notify_user` was
- *     invoked, deliver its `text` arg (after dedup); otherwise skip
- *     silently with reason='ack'
- *   - **onDelivered**: record dedup state on successful delivery
+ *   1. Active-hours pre-filter (inputGate equivalent — but enforced
+ *      pre-emit so we don't pollute the event log with skip events
+ *      when the heartbeat shouldn't have fired in the first place).
+ *      Outside hours → emit `agent.work.skip { source: 'heartbeat',
+ *      reason: 'outside-active-hours' }` directly via ctx.emit.
+ *   2. Otherwise emit `agent.work.requested { source: 'heartbeat',
+ *      prompt }`. The agent-work-listener picks it up and runs.
+ *   3. The heartbeat-specific outputGate (dedup + notify_user
+ *      inspection) lives in the source config registered with
+ *      agent-work-listener at startup. The runner-side gate sees
+ *      the AI's tool calls and decides deliver vs skip.
  *
- * Replaces the legacy STATUS regex protocol (`STATUS: HEARTBEAT_OK |
- * CHAT_YES + CONTENT: ...`) with structured tool-call signalling. The
- * runner-side gate handles dedup before the notification reaches
- * connectors, which means duplicate suppression and active-hours
- * filtering are uniform across configurations.
- *
- * Events emitted:
- *   - heartbeat.done  { reply, reason, durationMs, delivered }
- *   - heartbeat.skip  { reason, parsedReason? }
- *   - heartbeat.error { error, durationMs }
- *
- * Heartbeat-specific state stays in this module:
- *   - `HeartbeatDedup` — in-memory 24h window
- *   - `__heartbeat__` cron job lifecycle (idempotent add/update,
- *     hot-toggle via setEnabled)
- *   - active-hours config + tz-aware time-of-day check
+ * Heartbeat no longer imports AgentWorkRunner directly. State that
+ * heartbeat owns (HeartbeatDedup, active-hours, cron job lifecycle)
+ * stays here; AgentWork-pipeline state (session, gates) is registered
+ * with the listener.
  */
 
-import type { AgentWorkRunner, AgentWorkResultProbe } from '../../core/agent-work.js'
-import type { Listener } from '../../core/listener.js'
+import type { Listener, ListenerContext } from '../../core/listener.js'
 import type { ListenerRegistry } from '../../core/listener-registry.js'
 import { SessionStore } from '../../core/session.js'
 import { writeConfigSection } from '../../core/config.js'
 import type { CronEngine } from '../cron/engine.js'
+import type { AgentWorkListener, AgentWorkSourceConfig } from '../../core/agent-work-listener.js'
+import type { AgentWorkResultProbe } from '../../core/agent-work.js'
 
-const HEARTBEAT_EMITS = ['heartbeat.done', 'heartbeat.skip', 'heartbeat.error'] as const
+const HEARTBEAT_EMITS = [
+  'agent.work.requested',
+  'agent.work.skip',
+] as const
 type HeartbeatEmits = typeof HEARTBEAT_EMITS
 
 // ==================== Constants ====================
@@ -78,9 +76,11 @@ In short:
 
 export interface HeartbeatOpts {
   config: HeartbeatConfig
-  agentWorkRunner: AgentWorkRunner
+  /** Where to register the heartbeat source config so the agent-work
+   *  pipeline knows how to handle heartbeat-sourced requests. */
+  agentWorkListener: AgentWorkListener
   cronEngine: CronEngine
-  /** Registry to auto-register the heartbeat listener with. */
+  /** Listener registry for the heartbeat's own cron-fire subscriber. */
   registry: ListenerRegistry
   /** Optional: inject a session for testing. */
   session?: SessionStore
@@ -102,7 +102,7 @@ export interface Heartbeat {
 // ==================== Factory ====================
 
 export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
-  const { config, agentWorkRunner, cronEngine, registry } = opts
+  const { config, agentWorkListener, cronEngine, registry } = opts
   const session = opts.session ?? new SessionStore('heartbeat')
   const now = opts.now ?? Date.now
 
@@ -113,111 +113,78 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
 
   const dedup = new HeartbeatDedup()
 
+  // ---- Source config (registered with agent-work-listener) ----
+  //
+  // The output-side semantics (notify_user inspection + dedup gate)
+  // live here, closing over the dedup instance heartbeat owns. The
+  // agent-work-listener calls these when an agent.work.requested
+  // event with source='heartbeat' arrives.
+  const sourceConfig: AgentWorkSourceConfig = {
+    source: 'heartbeat',
+    session,
+    preamble: () =>
+      'You are operating in the heartbeat monitoring context (session: heartbeat). The following is the recent heartbeat conversation history.',
+    outputGate: (probe: AgentWorkResultProbe) => {
+      const call = probe.toolCalls.find((c) => c.name === 'notify_user')
+      if (!call) {
+        return { kind: 'skip', reason: 'ack', payload: { reason: 'ack' } }
+      }
+      const text = ((call.input ?? {}) as { text?: string }).text ?? ''
+      if (!text.trim()) {
+        return { kind: 'skip', reason: 'empty', payload: { reason: 'empty' } }
+      }
+      if (dedup.isDuplicate(text, now())) {
+        return {
+          kind: 'skip',
+          reason: 'duplicate',
+          payload: { reason: 'duplicate', parsedReason: text.slice(0, 80) },
+        }
+      }
+      return { kind: 'deliver', text, media: probe.media }
+    },
+    onDelivered: (text) => dedup.record(text, now()),
+  }
+
   const listener: Listener<'cron.fire', HeartbeatEmits> = {
     name: 'heartbeat',
     subscribes: 'cron.fire',
     emits: HEARTBEAT_EMITS,
-    async handle(entry, ctx) {
+    async handle(entry, ctx: ListenerContext<HeartbeatEmits>) {
       const payload = entry.payload
 
       // Filter to our own cron job
       if (payload.jobName !== HEARTBEAT_JOB_NAME) return
 
-      // Serial — preserve today's behaviour. Concurrent heartbeats would
-      // be ambiguous wrt dedup state.
+      // Serial — preserve today's behaviour. Concurrent heartbeats
+      // would race on dedup state.
       if (processing) return
 
       processing = true
       const startMs = now()
       console.log(`heartbeat: firing at ${new Date(startMs).toISOString()}`)
       try {
-        const result = await agentWorkRunner.run(
-          {
-            prompt: payload.payload,
-            session,
-            preamble:
-              'You are operating in the heartbeat monitoring context (session: heartbeat). The following is the recent heartbeat conversation history.',
-            metadata: { source: 'heartbeat' },
+        // ---- Pre-emit gate: active-hours ----
+        if (!isWithinActiveHours(config.activeHours, now())) {
+          await ctx.emit('agent.work.skip', {
+            source: 'heartbeat',
+            reason: 'outside-active-hours',
+          })
+          console.log(`heartbeat: skipped (outside-active-hours)`)
+          return
+        }
 
-            // ---- inputGate: active-hours guard ----
-            inputGate: () =>
-              isWithinActiveHours(config.activeHours, now())
-                ? null
-                : {
-                    reason: 'outside-active-hours',
-                    payload: { reason: 'outside-active-hours' },
-                  },
-
-            // ---- outputGate: notify_user inspection + dedup ----
-            outputGate: (probe: AgentWorkResultProbe) => {
-              const call = probe.toolCalls.find((c) => c.name === 'notify_user')
-              if (!call) {
-                return {
-                  kind: 'skip',
-                  reason: 'ack',
-                  payload: { reason: 'ack' },
-                }
-              }
-              const text = ((call.input ?? {}) as { text?: string }).text ?? ''
-              if (!text.trim()) {
-                return {
-                  kind: 'skip',
-                  reason: 'empty',
-                  payload: { reason: 'empty' },
-                }
-              }
-              if (dedup.isDuplicate(text, now())) {
-                return {
-                  kind: 'skip',
-                  reason: 'duplicate',
-                  payload: { reason: 'duplicate', parsedReason: text.slice(0, 80) },
-                }
-              }
-              return { kind: 'deliver', text, media: probe.media }
-            },
-
-            // ---- onDelivered: record dedup state ----
-            onDelivered: (text) => dedup.record(text, now()),
-
-            emitNames: {
-              done: 'heartbeat.done',
-              skip: 'heartbeat.skip',
-              error: 'heartbeat.error',
-            },
-            buildDonePayload: (_req, _result, durationMs, delivered) => {
-              // Look up what we actually delivered (the text the AI passed
-              // through notify_user). The runner already invoked notify with
-              // the gate's chosen text; for the done payload we re-derive it
-              // from the dedup state — `dedup.lastText` is what we just sent.
-              const reply = dedup.lastText ?? ''
-              return {
-                reply,
-                reason: 'notify_user',
-                durationMs,
-                delivered,
-              }
-            },
-            buildErrorPayload: (_req, err, durationMs) => ({
-              error: err.message,
-              durationMs,
-            }),
-          },
-          ctx.emit as never,
-        )
-
-        const durationMs = now() - startMs
-        console.log(
-          `heartbeat: ${result.outcome}` +
-            (result.skipReason ? ` reason=${result.skipReason}` : '') +
-            ` (${durationMs}ms)`,
-        )
+        // ---- Emit canonical request ----
+        await ctx.emit('agent.work.requested', {
+          source: 'heartbeat',
+          prompt: payload.payload,
+        })
       } finally {
         processing = false
       }
     },
   }
 
-  /** Ensure the cron job exists and listener is registered (idempotent). */
+  /** Ensure the cron job exists and the listener + producer are registered (idempotent). */
   async function ensureJobAndListener(): Promise<void> {
     const existing = cronEngine.list().find((j) => j.name === HEARTBEAT_JOB_NAME)
     if (existing) {
@@ -238,6 +205,7 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
 
     if (!registered) {
       registry.register(listener)
+      agentWorkListener.registerSource(sourceConfig)
       registered = true
     }
   }
@@ -245,29 +213,19 @@ export function createHeartbeat(opts: HeartbeatOpts): Heartbeat {
   return {
     listener,
     async start() {
-      // Always register job + listener (even if disabled) so setEnabled can toggle later
       await ensureJobAndListener()
     },
-
     stop() {
-      // Unregister the listener so a subsequent start() re-registers cleanly.
-      // Don't delete the cron job — it persists for restart recovery.
       if (registered) {
         registry.unregister(listener.name)
         registered = false
       }
     },
-
     async setEnabled(newEnabled: boolean) {
       enabled = newEnabled
-
-      // Ensure infrastructure exists (handles cold enable when start() was called with disabled)
       await ensureJobAndListener()
-
-      // Persist to config file
       await writeConfigSection('heartbeat', { ...config, enabled: newEnabled })
     },
-
     isEnabled() {
       return enabled
     },
@@ -294,12 +252,9 @@ export function isWithinActiveHours(
 
   const nowMinutes = currentMinutesInTimezone(timezone, nowMs)
 
-  // Normal range (e.g. 09:00 → 22:00)
   if (startMinutes <= endMinutes) {
     return nowMinutes >= startMinutes && nowMinutes < endMinutes
   }
-
-  // Overnight range (e.g. 22:00 → 06:00)
   return nowMinutes >= startMinutes || nowMinutes < endMinutes
 }
 
@@ -314,11 +269,9 @@ function parseHHMM(s: string): number | null {
 
 function currentMinutesInTimezone(tz: string, nowMs?: number): number {
   const date = nowMs ? new Date(nowMs) : new Date()
-
   if (tz === 'local') {
     return date.getHours() * 60 + date.getMinutes()
   }
-
   try {
     const fmt = new Intl.DateTimeFormat('en-US', {
       timeZone: tz,
@@ -338,15 +291,14 @@ function currentMinutesInTimezone(tz: string, nowMs?: number): number {
 // ==================== Dedup ====================
 
 /**
- * Suppress identical heartbeat messages within a time window (default 24h).
- *
- * In-memory only — restart loses dedup state. Acceptable trade-off:
- * heartbeat fires every ~30m by default, so a restart-window
- * collision is rare and the cost (one duplicate notification) is low.
+ * Suppress identical heartbeat notify_user texts within a time window
+ * (default 24h). In-memory only — restart loses dedup state. Acceptable
+ * trade-off: heartbeats are coarse-grained (~30m), restart-window
+ * collisions are rare, single-duplicate cost is low.
  */
 export class HeartbeatDedup {
-  /** Public for the heartbeat factory's `buildDonePayload` to read the
-   *  most-recently-delivered text without an extra signal channel. */
+  /** Public for callers that want to inspect the last-delivered text
+   *  (e.g. for the agent.work.done payload's metadata). */
   public lastText: string | null = null
   private lastSentAt = 0
   private windowMs: number

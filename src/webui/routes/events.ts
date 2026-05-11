@@ -10,7 +10,7 @@ interface EventsDeps {
   ctx: EngineContext
   /** Producer for webhook-ingested events. Narrowed to the set of external
    *  types; extend its declaration in WebPlugin when adding new external types. */
-  ingestProducer: ProducerHandle<readonly ['task.requested']>
+  ingestProducer: ProducerHandle<readonly ['agent.work.requested']>
 }
 
 /** Event log routes: GET /, GET /recent, GET /stream (SSE), POST /ingest, GET /auth-status */
@@ -78,7 +78,19 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
 
     const { type, payload } = body as { type: string; payload: unknown }
 
-    if (!isExternalEventType(type)) {
+    // Legacy alias: `task.requested` is the pre-AgentWork name for what
+    // is now `agent.work.requested { source: 'task' }`. Accept it on
+    // the wire and translate to the canonical form so existing external
+    // integrations don't break. Memory: "Don't delete our own exports".
+    let canonicalType = type
+    let canonicalPayload = payload
+    if (type === 'task.requested') {
+      canonicalType = 'agent.work.requested'
+      const p = (payload ?? {}) as { prompt?: string }
+      canonicalPayload = { source: 'task', prompt: p.prompt ?? '' }
+    }
+
+    if (!isExternalEventType(canonicalType)) {
       return c.json(
         { error: `Event type '${type}' is not in the external allowlist` },
         403,
@@ -86,7 +98,7 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
     }
 
     try {
-      validateEventPayload(type, payload)
+      validateEventPayload(canonicalType, canonicalPayload)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return c.json({ error: msg }, 400)
@@ -97,7 +109,7 @@ export function createEventsRoutes({ ctx, ingestProducer }: EventsDeps) {
         t: string,
         p: unknown,
       ) => Promise<{ seq: number; ts: number; type: string; payload: unknown }>
-    )(type, payload)
+    )(canonicalType, canonicalPayload)
     return c.json(entry, 201)
   })
 

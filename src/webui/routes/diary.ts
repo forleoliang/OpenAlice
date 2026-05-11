@@ -3,11 +3,17 @@
  *
  * This is the "status" surface (as opposed to the Chat "notification" surface):
  * a passive view of what Alice has been thinking across recent heartbeat cycles,
- * including silent HEARTBEAT_OK acknowledgements that never reach Chat.
+ * including silent acknowledgements that never reach Chat.
  *
  * Data sources (joined by timestamp proximity):
- *   - SessionStore('heartbeat')        → full AI turns (prompt, reasoning, tool calls, reply)
- *   - EventLog heartbeat.{done,skip,error} → outcome metadata (delivered, reason, durationMs)
+ *   - SessionStore('heartbeat')           → full AI turns (prompt, reasoning, tool calls, reply)
+ *   - EventLog agent.work.{done,skip,error} filtered by source='heartbeat'
+ *                                         → outcome metadata (delivered, reason, durationMs)
+ *
+ * Heartbeat-attributable events all flow through the canonical AgentWork
+ * event types now; we filter on `payload.source === 'heartbeat'`. (Pre-AgentWork
+ * the heartbeat module had its own `heartbeat.*` event types; consolidated
+ * during the AgentWork upstreams refactor.)
  *
  * Deliberately polling-only (no SSE). Heartbeat fires ~every 30min; the overhead
  * of a persistent subscription is not justified for this frequency.
@@ -18,20 +24,20 @@ import type { EngineContext } from '../../core/types.js'
 import { SessionStore, toChatHistory, type ChatHistoryItem } from '../../core/session.js'
 import type { EventLogEntry } from '../../core/event-log.js'
 import type {
-  HeartbeatDonePayload,
-  HeartbeatSkipPayload,
-  HeartbeatErrorPayload,
+  AgentWorkDonePayload,
+  AgentWorkSkipPayload,
+  AgentWorkErrorPayload,
 } from '../../core/agent-event.js'
 
 // ==================== Types ====================
 
 export type DiaryOutcome =
-  | 'delivered'      // heartbeat.done, delivered=true — CHAT_YES pushed to Chat
-  | 'silent-ok'      // heartbeat.done delivered=false, or skip.reason=ack — silent HEARTBEAT_OK
-  | 'duplicate'      // skip.reason=duplicate — same content as recent cycle
-  | 'empty'          // skip.reason=empty — AI produced no content
-  | 'outside-hours'  // skip.reason=outside-active-hours — quiet-hours guard tripped
-  | 'error'          // heartbeat.error — AI call threw
+  | 'delivered'      // agent.work.done, delivered=true, source=heartbeat
+  | 'silent-ok'      // agent.work.done delivered=false, or skip.reason=ack
+  | 'duplicate'      // skip.reason=duplicate
+  | 'empty'          // skip.reason=empty
+  | 'outside-hours'  // skip.reason=outside-active-hours
+  | 'error'          // agent.work.error, source=heartbeat
 
 export interface DiaryCycle {
   seq: number
@@ -49,7 +55,7 @@ export interface DiaryHistoryResponse {
 
 // ==================== Constants ====================
 
-const HEARTBEAT_EVENT_TYPES = ['heartbeat.done', 'heartbeat.skip', 'heartbeat.error'] as const
+const AGENT_WORK_EVENT_TYPES = ['agent.work.done', 'agent.work.skip', 'agent.work.error'] as const
 
 /** Slack when joining session entries to cycles by timestamp — covers cron.fire → session.appendUser → ... → event.append gaps. */
 const INCREMENTAL_SLACK_MS = 5_000
@@ -72,13 +78,19 @@ function getHeartbeatSession(): SessionStore {
 
 // ==================== Event → cycle mapping ====================
 
-/** Classify a heartbeat event into a user-visible outcome. */
+/** Type predicate: is this canonical agent-work event a heartbeat one? */
+function isHeartbeatAgentWorkEvent(entry: EventLogEntry): boolean {
+  const payload = entry.payload as { source?: string } | null | undefined
+  return payload?.source === 'heartbeat'
+}
+
+/** Classify a heartbeat-sourced agent-work event into a user-visible outcome. */
 export function outcomeFromEvent(entry: EventLogEntry): DiaryOutcome {
-  if (entry.type === 'heartbeat.done') {
-    return (entry.payload as HeartbeatDonePayload).delivered ? 'delivered' : 'silent-ok'
+  if (entry.type === 'agent.work.done') {
+    return (entry.payload as AgentWorkDonePayload).delivered ? 'delivered' : 'silent-ok'
   }
-  if (entry.type === 'heartbeat.skip') {
-    const reason = (entry.payload as HeartbeatSkipPayload).reason
+  if (entry.type === 'agent.work.skip') {
+    const reason = (entry.payload as AgentWorkSkipPayload).reason
     switch (reason) {
       case 'ack': return 'silent-ok'
       case 'duplicate': return 'duplicate'
@@ -87,7 +99,7 @@ export function outcomeFromEvent(entry: EventLogEntry): DiaryOutcome {
       default: return 'silent-ok'
     }
   }
-  if (entry.type === 'heartbeat.error') return 'error'
+  if (entry.type === 'agent.work.error') return 'error'
   return 'silent-ok'
 }
 
@@ -98,16 +110,19 @@ export function buildDiaryCycles(events: EventLogEntry[]): DiaryCycle[] {
     let reason: string | undefined
     let durationMs: number | undefined
 
-    if (e.type === 'heartbeat.done') {
-      const p = e.payload as HeartbeatDonePayload
-      reason = p.reason || undefined
+    if (e.type === 'agent.work.done') {
+      const p = e.payload as AgentWorkDonePayload
       durationMs = p.durationMs
-    } else if (e.type === 'heartbeat.skip') {
-      const p = e.payload as HeartbeatSkipPayload
-      // parsedReason is the AI's own wording; prefer it over the machine-facing reason code.
-      reason = p.parsedReason ?? p.reason
-    } else if (e.type === 'heartbeat.error') {
-      const p = e.payload as HeartbeatErrorPayload
+      // No source-specific reason field — done events just have reply text.
+    } else if (e.type === 'agent.work.skip') {
+      const p = e.payload as AgentWorkSkipPayload
+      // The heartbeat outputGate stuffs the (truncated) notify_user text into
+      // metadata.parsedReason for duplicate skips. Prefer that over the
+      // machine-facing reason code.
+      const parsedReason = (p.metadata as { parsedReason?: string } | undefined)?.parsedReason
+      reason = parsedReason ?? p.reason
+    } else if (e.type === 'agent.work.error') {
+      const p = e.payload as AgentWorkErrorPayload
       reason = p.error
       durationMs = p.durationMs
     }
@@ -136,10 +151,12 @@ export function createDiaryRoutes(ctx: EngineContext) {
     // The ring buffer (~500 entries) gets saturated by high-frequency events
     // (snapshot.skipped, account.health), evicting older heartbeat entries —
     // the activity we care about here fires only ~every 30min.
-    // One disk scan with in-memory type filtering is cheaper than three.
+    // One disk scan with in-memory type+source filtering is cheaper than three.
     const allEvents = await ctx.eventLog.read({ afterSeq })
-    const eventTypes = new Set<string>(HEARTBEAT_EVENT_TYPES)
-    const events = allEvents.filter((e) => eventTypes.has(e.type))
+    const typeSet = new Set<string>(AGENT_WORK_EVENT_TYPES)
+    const events = allEvents.filter(
+      (e) => typeSet.has(e.type) && isHeartbeatAgentWorkEvent(e),
+    )
     const cycles = buildDiaryCycles(events).slice(-limit)
 
     // Read heartbeat session entries.

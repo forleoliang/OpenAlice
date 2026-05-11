@@ -48,7 +48,7 @@ import { createEventBus } from './core/event-bus.js'
 import { createCronEngine, createCronListener, createCronTools } from './task/cron/index.js'
 import { createHeartbeat } from './task/heartbeat/index.js'
 import { createMetricsListener } from './task/metrics/index.js'
-import { createTaskRouter } from './task/task-router/index.js'
+import { createAgentWorkListener } from './core/agent-work-listener.js'
 import { NewsCollectorStore, NewsCollector } from './domain/news/index.js'
 import { createNewsArchiveTools } from './tool/news.js'
 
@@ -285,11 +285,39 @@ async function main() {
 
   const agentWorkRunner = new AgentWorkRunner({ agentCenter, connectorCenter })
 
+  // ==================== AgentWork Listener (single dispatch point) ====================
+  //
+  // Owns all `agent.work.requested` traffic. Each trigger source
+  // (cron / heartbeat / webhook) registers its source config and
+  // emits the canonical event; the listener routes by source field
+  // and runs the AgentWork pipeline.
+
+  const agentWorkListener = createAgentWorkListener({
+    runner: agentWorkRunner,
+    registry: listenerRegistry,
+  })
+  await agentWorkListener.start()
+
+  // Register the `task` (webhook-triggered) source inline. Unlike
+  // heartbeat and cron, there's no listener-side wrapper — the
+  // webhook ingest endpoint emits agent.work.requested directly
+  // (or translates the legacy task.requested wire format).
+  const taskSession = new SessionStore('task/default')
+  await taskSession.restore()
+  agentWorkListener.registerSource({
+    source: 'task',
+    session: taskSession,
+    preamble: () =>
+      'You are handling an externally-triggered task (session: task/default). Follow the prompt and reply with what the caller needs.',
+    buildDoneMetadata: (req) => ({ prompt: req.prompt }),
+    buildErrorMetadata: (req) => ({ prompt: req.prompt }),
+  })
+
   // ==================== Cron Listener ====================
 
   const cronSession = new SessionStore('cron/default')
   await cronSession.restore()
-  const cronListener = createCronListener({ agentWorkRunner, registry: listenerRegistry, session: cronSession })
+  const cronListener = createCronListener({ agentWorkListener, registry: listenerRegistry, session: cronSession })
   await cronListener.start()
 
   // ==================== Snapshot Scheduler ====================
@@ -304,17 +332,13 @@ async function main() {
 
   const heartbeat = createHeartbeat({
     config: config.heartbeat,
-    agentWorkRunner, cronEngine, registry: listenerRegistry,
+    agentWorkListener, cronEngine, registry: listenerRegistry,
+    session: new SessionStore('heartbeat'),
   })
   await heartbeat.start()
   if (config.heartbeat.enabled) {
     console.log(`heartbeat: enabled (every ${config.heartbeat.every})`)
   }
-
-  // ==================== Task Router (external `task.requested` handler) ====================
-
-  const taskRouter = createTaskRouter({ agentWorkRunner, registry: listenerRegistry })
-  await taskRouter.start()
 
   // ==================== Event Metrics (wildcard observer) ====================
 
